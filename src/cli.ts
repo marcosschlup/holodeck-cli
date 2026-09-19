@@ -7,14 +7,14 @@ import { fileURLToPath } from 'node:url'
 import { input, password, select } from '@inquirer/prompts'
 import { Command } from 'commander'
 import { listAvailableModels } from './agentSession.js'
+import { runAgentList, runAgentSetup, runAgentStart } from './agentCommands.js'
 import { runChannel } from './channelServer.js'
 import { loadClaudeToken, loadServerUrl, setClaudeToken, setServerUrl } from './config.js'
 import { runDaemon } from './daemon.js'
 import { resolveAgentIdentity } from './holodeck.js'
-import { getAgentAccessToken, listMyAgents } from './holodeckApi.js'
+import { listMyAgents } from './holodeckApi.js'
 import { loginWithBrowser } from './holodeckLogin.js'
 import { loadLoginCredential, saveLoginCredential } from './loginCredential.js'
-import { findMcpServerArgs, upsertMcpServerEntry } from './mcpConfig.js'
 import { sendIpcRequest, type IpcResponse } from './ipc.js'
 import { formatLogContent, formatLogLine } from './logFormat.js'
 import { deleteLog, followLog, logFileExists, readLog } from './personaLog.js'
@@ -194,22 +194,6 @@ async function watchPersonaLog(persona: string, raw: boolean, signal: AbortSigna
   )
 }
 
-// An Agent's name (e.g. "Claude Desktop") is free text, but a `.mcp.json`
-// server key becomes a shell word in the printed launch command
-// (`server:holodeck-<name>`, `channel add` below) — an untouched space or
-// other punctuation there would silently break copy-paste. The exact
-// agent name still travels correctly as `channel run`'s own argument
-// (inside a JSON args array, never shell-parsed), so this slug is only
-// ever used for the server key/display, never for resolving the
-// credential back.
-function slugifyForMcpServerName(agentName: string): string {
-  const slug = agentName
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-  return slug === '' ? 'agent' : slug
-}
-
 // No command takes an Agent's name as an argument (HOL-132) - choosing one is
 // always a selector. For the commands that operate on personas registered
 // with the local daemon, the choices are the locally registered personas.
@@ -260,72 +244,29 @@ async function main(): Promise<void> {
         console.log(`Signed in, but Holodeck's CLI API didn't accept the login: ${errorMessage(error)}`)
         return
       }
-      console.log('Next: set up an Agent, for example `holodeck channel add` in a project. `holodeck --help` lists the other options.')
+      console.log('Next: run `holodeck agent setup` in a project folder to get one of your Agents ready there.')
     })
 
-  // Push events into a live Claude Code session via its own Channels
-  // feature (HOL-122/130), not the local daemon `register`/`agent`
-  // commands below manage — a Channel is a subprocess Claude Code itself
-  // spawns per session, over stdio, from a `.mcp.json` entry, so there's
-  // no persona to register with anything running on this machine ahead of
-  // time; `channel add` only needs the login from `holodeck login` above.
-  // No command in this CLI takes an Agent's name as an argument (HOL-132):
-  // choosing an Agent is always a selector, listing only the Agents that
-  // make sense for what is being set up.
-  const channel = program.command('channel').description('Push Task events into a live Claude Code session')
+  // The Channel machinery (HOL-122/130): a process Claude Code itself spawns
+  // per session, over stdio, from the config `agent setup` writes. An
+  // implementation detail the person never types (HOL-135), so hidden from
+  // --help - but `channel run` must keep working (existing config files call
+  // it), and `channel add` stays as a hidden alias of `agent setup` for anyone
+  // following older instructions.
+  const channel = program.command('channel', { hidden: true }).description('Internal: the per-session Agent process')
 
   channel
     .command('add')
-    .description('Wire up a Channel for one of your Agents in the current project directory')
-    .action(async () => {
-      let agents
-      try {
-        agents = await listMyAgents('channel')
-      } catch (error) {
-        console.log(errorMessage(error))
-        return
-      }
-      if (agents.length === 0) {
-        console.log("You don't own any Channel Agents yet. Create one in Holodeck (Manage Agents, type: Channel), then run this again.")
-        return
-      }
-
-      const agent = await select({
-        message: 'Which Agent should this Channel run as?',
-        choices: agents.map((a) => ({ name: a.name, value: a })),
-      })
-
-      // Ask for a token now, before writing anything: proves this Agent can
-      // actually run as a Channel (right type, still exists) instead of
-      // leaving a `.mcp.json` entry that only fails once a session starts.
-      try {
-        await getAgentAccessToken(agent.id, 'channel')
-      } catch (error) {
-        console.log(`Couldn't get a token for "${agent.name}": ${errorMessage(error)}`)
-        return
-      }
-
-      // Names aren't unique, so two Agents can slug to the same server
-      // name - never overwrite another Agent's entry.
-      let serverName = `holodeck-${slugifyForMcpServerName(agent.name)}`
-      const existingArgs = findMcpServerArgs(process.cwd(), serverName)
-      if (existingArgs && existingArgs[2] !== agent.id) {
-        serverName = `${serverName}-${agent.id.slice(-6)}`
-      }
-
-      upsertMcpServerEntry(process.cwd(), serverName, 'holodeck', ['channel', 'run', agent.id])
-      console.log(`Added "${serverName}" (${agent.name}) to .mcp.json in this directory.`)
-      console.log('Channels is in research preview — Claude Code needs this flag today to load it:\n')
-      console.log(`  claude --dangerously-load-development-channels server:${serverName}\n`)
-      console.log(
-        'Run that command to start a session with this Channel active. A session that\'s already open needs to be closed and reopened with it, not reloaded (Claude Code only reads .mcp.json at startup).',
-      )
+    .description('Alias of `agent setup`')
+    .option('--verbose', 'also show the underlying command')
+    .action(async (options: { verbose?: boolean }) => {
+      await runAgentSetup(options)
     })
 
   channel
     .command('run')
     .description("The Channel's own MCP server — Claude Code spawns this itself over stdio, don't run it by hand")
-    .argument('<agentId>', "the Agent's id, as written into .mcp.json by `channel add`")
+    .argument('<agentId>', "the Agent's id, as written into its .holodeck config by `channel add`")
     .action(async (agentId: string) => {
       // Claude Code reads this process's stdout as the MCP protocol: failures
       // go to stderr, and the exit code is what shows up as the server
@@ -534,7 +475,31 @@ async function main(): Promise<void> {
   // ambiguous with "start the daemon" (Marcos, 2026-09-03) — this group
   // exists specifically so no command name has to mean two different
   // things depending on whether an argument happens to be there.
-  const agent = program.command('agent').description('Manage one persona registered with the local daemon')
+  const agent = program.command('agent').description('Set up and start your Agents on this machine')
+
+  agent
+    .command('setup')
+    .description('Prepare one of your Agents to work in this folder')
+    .option('--verbose', 'also show the underlying command')
+    .action(async (options: { verbose?: boolean }) => {
+      await runAgentSetup(options)
+    })
+
+  agent
+    .command('start')
+    .description('Put one of the Agents set up in this folder to work (arguments after -- go to Claude Code)')
+    .argument('[claudeArguments...]', 'extra arguments for Claude Code, after --')
+    .option('--verbose', 'also show the underlying command')
+    .action(async (claudeArguments: string[], options: { verbose?: boolean }) => {
+      await runAgentStart(claudeArguments, options)
+    })
+
+  agent
+    .command('list')
+    .description('The Agents set up in this folder')
+    .action(async () => {
+      await runAgentList()
+    })
 
   agent
     .command('pause')
@@ -663,11 +628,13 @@ async function main(): Promise<void> {
     `
 Common commands:
   holodeck login                   Sign in to Holodeck in your browser
-  holodeck channel add             Wire up a Channel for one of your Agents here
+  holodeck agent setup             Prepare one of your Agents to work in this folder
+  holodeck agent start             Put an Agent to work
+  holodeck agent list              The Agents set up in this folder
   holodeck register                Register a new Agent (interactive)
-  holodeck list                   List every registered Agent
-  holodeck agent pause <name>     Pause an Agent (keeps its token)
-  holodeck agent unpause <name>   Resume a paused Agent
+  holodeck list                    List every registered Agent
+  holodeck agent pause             Pause a registered Agent (keeps its token)
+  holodeck agent unpause           Resume a paused Agent
   holodeck status                 Check whether the daemon is running`,
   )
 

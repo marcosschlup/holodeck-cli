@@ -28,7 +28,7 @@ export interface AgentIdentity {
 // server itself is stateless per request (a fresh McpServer + transport
 // per POST, `sessionIdGenerator: undefined`, backend/src/app.ts), so there's
 // no session worth keeping a client open across calls for.
-async function withMcpClient<T>(serverUrl: string, token: string, fn: (client: Client) => Promise<T>): Promise<T> {
+export async function withMcpClient<T>(serverUrl: string, token: string, fn: (client: Client) => Promise<T>): Promise<T> {
   const transport = new StreamableHTTPClientTransport(new URL('/mcp', serverUrl), {
     requestInit: { headers: { Authorization: `Bearer ${token}`, 'User-Agent': CONNECTOR_USER_AGENT } },
   })
@@ -59,6 +59,21 @@ async function callJsonTool<T>(serverUrl: string, token: string, name: string): 
 // token or an unreachable server — the caller decides how to report that.
 export function resolveAgentIdentity(serverUrl: string, token: string): Promise<AgentIdentity> {
   return callJsonTool<AgentIdentity>(serverUrl, token, 'get_my_context')
+}
+
+// Everything a Channel (HOL-130) needs to introduce itself, from ONE
+// connection: who the Agent is, and Holodeck's own MCP `instructions` (how
+// to use Holodeck, the Agent's persona) - the text a session connected to
+// /mcp directly would have been handed at `initialize`.
+export function fetchAgentSession(
+  serverUrl: string,
+  token: string,
+): Promise<{ identity: AgentIdentity; instructions: string | undefined }> {
+  return withMcpClient(serverUrl, token, async (client) => {
+    const result = await client.callTool({ name: 'get_my_context', arguments: {} })
+    const content = result.content as { type: string; text: string }[]
+    return { identity: JSON.parse(content[0]!.text) as AgentIdentity, instructions: client.getInstructions() }
+  })
 }
 
 export interface HealthReport {

@@ -84,6 +84,33 @@ export function describeChannelEvent(event: ChannelEvent): ChannelNotification {
   }
 }
 
+// How long the connection has to have been down before a reconnect is
+// worth a turn of the model. A drop-and-retry of a second or two (a proxy
+// recycling an idle stream, a brief network hiccup) leaves a window so small
+// that asking the Agent to re-check everything each time costs far more
+// than it protects; a real outage (laptop asleep, network gone, Holodeck
+// restarting) is what the reconcile is for. The very first connect always
+// reconciles: whatever happened while the session was closed is exactly the
+// case this exists for.
+export const RECONCILE_AFTER_GAP_MS = 30_000
+
+export function shouldReconcileOnConnect(droppedAt: number | undefined, now: number): boolean {
+  return droppedAt === undefined || now - droppedAt >= RECONCILE_AFTER_GAP_MS
+}
+
+// Sent when the push connection is established and shouldReconcileOnConnect
+// says it is worth it. A push is never replayed (PLAN.md 9, "Missed events":
+// reconcile, don't replay), so anything that happened while this session was
+// closed, or the connection was down, is simply gone - this is what makes the
+// Agent go and look at current state instead. Tells it to stay quiet when
+// there is nothing to do, since this starts a turn in the session by itself.
+export function describeChannelConnected(agentName: string): ChannelNotification {
+  return {
+    content: `You are now connected to Holodeck as ${agentName}. While this session was closed, or the connection was down, events may have been missed. Check what needs your attention now: Tasks assigned to you that aren't finished (list_tasks with assignedToMe), and any direct instruction from your owner you haven't read (list_my_instructions). Act on what you find. If nothing needs attention, don't say anything.`,
+    meta: { event: 'connected' },
+  }
+}
+
 // Not one of the pushed events: this connection stopped on purpose. Sent so
 // the session isn't left silently waiting for events that will never come.
 export function describeChannelStopped(reason: 'stop_requested' | 'replaced'): ChannelNotification {
@@ -95,7 +122,7 @@ export function describeChannelStopped(reason: 'stop_requested' | 'replaced'): C
       }
     : {
         content:
-          'This Holodeck channel was replaced by another session running the same Agent, and this one has disconnected: no more Holodeck events will arrive here. Only one session can hold an Agent at a time.',
+          'This Holodeck channel was replaced by another session running the same Agent. This session has disconnected: no more Holodeck events will arrive here, and its Holodeck tools are disabled. Only one session can hold an Agent at a time; stop acting as this Agent here.',
         meta: { event: 'connection_replaced' },
       }
 }

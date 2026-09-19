@@ -88,6 +88,12 @@ export interface PersonaConnectionHandlers {
   // stdio transport to Claude Code, so anything else written there corrupts
   // the protocol (HOL-130).
   log?: (message: string) => void
+  // Fired when a connection that had been established ends (dropped, or
+  // closed by the server) and this is about to try again - not for a
+  // connection that never came up, and not after stop(). Lets a caller tell
+  // a blip of a second from a real outage when deciding whether it may have
+  // missed something.
+  onDisconnected?: () => void
   // Fired when Holodeck closes this connection because a newer one for the
   // same Agent took over (`connection_replaced`). When a handler is given,
   // the connection does NOT reconnect: two live sessions for one Agent
@@ -244,6 +250,7 @@ export function startPersonaConnection(
     while (!stopped) {
       status = attempt === 0 ? 'connecting' : 'reconnecting'
       abortController = new AbortController()
+      let wasConnected = false
       try {
         const response = await fetch(new URL('/agent/events', serverUrl), {
           headers: {
@@ -257,6 +264,7 @@ export function startPersonaConnection(
           throw new Error(`unexpected /agent/events response: ${response.status}`)
         }
         status = 'connected'
+        wasConnected = true
         attempt = 0
         log('connected')
         handlers?.onConnected?.()
@@ -272,6 +280,9 @@ export function startPersonaConnection(
       }
       if (stopped) {
         return
+      }
+      if (wasConnected) {
+        handlers?.onDisconnected?.()
       }
       const delayMs = backoffMs(attempt)
       attempt += 1
