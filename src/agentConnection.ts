@@ -1,5 +1,17 @@
 import { CONNECTOR_USER_AGENT, reportDisconnect, reportHealth } from './holodeck.js'
-import type { PersonaRecord } from './store.js'
+
+// Who the connection acts as. `token` is a plain string for a daemon persona
+// (`PersonaRecord`'s static token), or a function for a Channel (HOL-130),
+// whose Agent-scoped token expires hourly and is fetched fresh each time it's
+// needed (holodeckApi.ts's getAgentAccessToken keeps it cached and renewed).
+export interface ConnectionIdentity {
+  name: string
+  token: string | (() => Promise<string>)
+}
+
+function resolveToken(identity: ConnectionIdentity): Promise<string> {
+  return Promise.resolve(typeof identity.token === 'string' ? identity.token : identity.token())
+}
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting'
 
@@ -71,6 +83,18 @@ export interface AgentStopRequestedEvent {
 }
 
 export interface PersonaConnectionHandlers {
+  // Where this connection's own status lines go (connected, dropped, ...).
+  // Defaults to stdout - which a Channel can't use: its stdout IS the MCP
+  // stdio transport to Claude Code, so anything else written there corrupts
+  // the protocol (HOL-130).
+  log?: (message: string) => void
+  // Fired when Holodeck closes this connection because a newer one for the
+  // same Agent took over (`connection_replaced`). When a handler is given,
+  // the connection does NOT reconnect: two live sessions for one Agent
+  // would otherwise steal the connection back and forth forever, each
+  // eviction evicting the other. Without a handler the original behavior
+  // stays: reconnect after the backoff.
+  onConnectionReplaced?: () => void
   // Fired every time the connection reaches 'connected' — the very first
   // connect and every reconnect after a drop, no distinction (HOL-61:
   // "reconcile, don't replay" — this is the hook for a persona to catch up
@@ -117,7 +141,7 @@ function backoffMs(attempt: number): number {
 // /agent/events` (backend/src/app.ts) writes plain `data: <json>\n\n`
 // frames, nothing more elaborate (no `event:`/`id:` lines) to parse.
 export function startPersonaConnection(
-  record: PersonaRecord,
+  record: ConnectionIdentity,
   serverUrl: string,
   handlers?: PersonaConnectionHandlers,
 ): PersonaConnection {
@@ -126,7 +150,12 @@ export function startPersonaConnection(
   let abortController: AbortController | null = null
 
   function log(message: string): void {
-    console.log(`[${record.name}] ${message}`)
+    const line = `[${record.name}] ${message}`
+    if (handlers?.log) {
+      handlers.log(line)
+    } else {
+      console.log(line)
+    }
   }
 
   async function handleFrame(frame: string): Promise<void> {
@@ -145,7 +174,7 @@ export function startPersonaConnection(
       | { type: string }
     if (event.type === 'health_check') {
       try {
-        const report = await reportHealth(serverUrl, record.token)
+        const report = await reportHealth(serverUrl, await resolveToken(record))
         log(`answered health_check (uptime ${report.uptimeMs ?? '?'}ms)`)
       } catch (error) {
         log(`failed to answer health_check: ${String(error)}`)
@@ -176,9 +205,17 @@ export function startPersonaConnection(
     } else if (event.type === 'agent_stop_requested') {
       log('stop requested from Web UI')
       handlers?.onAgentStopRequested?.(event as AgentStopRequestedEvent)
+    } else if (event.type === 'connection_replaced' && handlers?.onConnectionReplaced) {
+      log('replaced by a newer connection for this Agent')
+      // Set before the handler so the loop below can't reconnect in the
+      // meantime, and so stop() skips report_disconnect: the newer
+      // connection is the live one, reporting a disconnect would flip the
+      // Agent offline underneath it.
+      stopped = true
+      handlers.onConnectionReplaced()
     }
-    // 'connection_replaced' needs no handling here beyond letting the
-    // stream end naturally (the server closes it right after sending
+    // Otherwise 'connection_replaced' needs no handling here beyond letting
+    // the stream end naturally (the server closes it right after sending
     // this) — the read loop below's own `done` branch takes it from there.
   }
 
@@ -210,7 +247,7 @@ export function startPersonaConnection(
       try {
         const response = await fetch(new URL('/agent/events', serverUrl), {
           headers: {
-            Authorization: `Bearer ${record.token}`,
+            Authorization: `Bearer ${await resolveToken(record)}`,
             'User-Agent': CONNECTOR_USER_AGENT,
             Accept: 'text/event-stream',
           },
@@ -253,7 +290,7 @@ export function startPersonaConnection(
       stopped = true
       abortController?.abort()
       try {
-        await reportDisconnect(serverUrl, record.token)
+        await reportDisconnect(serverUrl, await resolveToken(record))
       } catch (error) {
         log(`failed to report disconnect: ${String(error)}`)
       }

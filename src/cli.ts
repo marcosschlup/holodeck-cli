@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { input, password, select } from '@inquirer/prompts'
 import { Command } from 'commander'
 import { listAvailableModels } from './agentSession.js'
+import { runChannel } from './channelServer.js'
 import { loadClaudeToken, loadServerUrl, setClaudeToken, setServerUrl } from './config.js'
 import { runDaemon } from './daemon.js'
 import { resolveAgentIdentity } from './holodeck.js'
@@ -325,8 +326,17 @@ async function main(): Promise<void> {
     .command('run')
     .description("The Channel's own MCP server — Claude Code spawns this itself over stdio, don't run it by hand")
     .argument('<agentId>', "the Agent's id, as written into .mcp.json by `channel add`")
-    .action((agentId: string) => {
-      notImplemented(`channel run ${agentId}`)
+    .action(async (agentId: string) => {
+      // Claude Code reads this process's stdout as the MCP protocol: failures
+      // go to stderr, and the exit code is what shows up as the server
+      // `failed` in `/mcp`.
+      try {
+        await runChannel(agentId, readOwnVersion())
+      } catch (error) {
+        process.stderr.write(`${errorMessage(error)}
+`)
+        process.exitCode = 1
+      }
     })
 
   program
