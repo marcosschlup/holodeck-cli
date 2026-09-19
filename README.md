@@ -88,8 +88,8 @@ set-claude-token` is the reliable path for everyone else.
 
 ### 3. Point Agent Connector at your Holodeck server
 
-Defaults to `http://localhost:3000` (a local/self-hosted instance). Only
-needed if yours is somewhere else:
+Defaults to the hosted Holodeck, `https://api.holodeck-tracker.com`. Only
+needed if you self-host:
 
 ```bash
 holodeck config set-server https://your-holodeck-instance.example.com
@@ -165,9 +165,6 @@ holodeck path set <persona> <path>         Not built yet
 
 ## Development
 
-No packaged binary yet (single-executable packaging is deliberately
-deferred until the design stabilizes, PLAN.md 9) — run it from source:
-
 ```bash
 npm install
 npm run dev -- <command>   # run the CLI directly with tsx, no build step
@@ -175,4 +172,70 @@ npm run check               # lint + typecheck
 npm run build                # compile to dist/, then `npm start -- <command>` or `node dist/cli.js <command>`
 ```
 
-`holodeck --version` reads straight from `package.json` — no separate literal to keep in sync. Bump it with npm's own `npm version patch|minor|major` (updates `package.json` and creates a matching git commit + tag) when a change is worth calling a new version. No CI/publish pipeline yet, so that's a manual, deliberate step for now — revisit once real distribution (PLAN.md 9's deferred SEA packaging) exists and commit-driven automation (e.g. semantic-release) is actually worth the setup.
+## Packaging a standalone build
+
+`npm run build:sea` bundles the CLI (esbuild) and packages it as a Node
+[Single Executable Application](https://nodejs.org/api/single-executable-applications.html)
+via `scripts/build-sea.mjs` — a single native binary at
+`dist-sea/holodeck[.exe]` that needs no Node install on the machine that
+runs it. Built and verified on Windows; the macOS/Linux code-signing
+steps follow Node's own docs but haven't been run on real hardware yet
+(no CI matrix for this yet, PLAN.md 9).
+
+`npm run release -- [patch|minor|major]` (default `patch`) does a full
+release in one step: bumps the version (`npm version`, which also
+commits and tags), builds the SEA binary, pushes the commit + tag, and
+publishes it as a GitHub Release via `gh release create`. Requires a
+clean working tree, a configured `git remote`, and the `gh` CLI
+installed and authenticated (`gh auth login`) — fails fast with a clear
+message if any of those aren't met.
+
+`holodeck --version` reads from `package.json` normally (dev, `npm run build`); a SEA build gets its version baked in at bundle time instead, since there's no `package.json` next to the binary to read at runtime.
+
+### Installing the binary — running `holodeck` from anywhere
+
+There's no installer yet — building only produces the file at
+`dist-sea/holodeck[.exe]`, it doesn't put it on your `PATH`. Until it
+does, `holodeck` isn't a recognized command; move (or copy) the binary
+into a folder your `PATH` already includes, once per machine:
+
+**Windows (PowerShell):**
+
+```powershell
+mkdir "$env:LOCALAPPDATA\Holodeck" -Force
+Copy-Item .\dist-sea\holodeck.exe "$env:LOCALAPPDATA\Holodeck\holodeck.exe"
+[Environment]::SetEnvironmentVariable("Path", "$env:Path;$env:LOCALAPPDATA\Holodeck", "User")
+```
+
+Open a new terminal afterwards (`PATH` changes don't reach already-open
+ones). Windows resolves `holodeck` to `holodeck.exe` on its own
+(`PATHEXT`), no need to type the extension.
+
+**macOS / Linux:**
+
+```bash
+mkdir -p ~/.local/bin
+cp ./dist-sea/holodeck ~/.local/bin/holodeck
+```
+
+`~/.local/bin` is on `PATH` by default on most recent distros; if
+`holodeck --version` isn't found afterwards, add it yourself:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"   # add to ~/.bashrc or ~/.zshrc to persist
+```
+
+**macOS only, first run after downloading (not building locally):** a
+binary downloaded through a browser (e.g. from a GitHub Release) gets
+quarantined by Gatekeeper, which blocks it as "from an unidentified
+developer" the first time. `build-sea.mjs` already ad-hoc-signs the
+binary, but that doesn't clear the quarantine flag itself — either
+right-click the file → Open → confirm once, or:
+
+```bash
+xattr -d com.apple.quarantine ~/.local/bin/holodeck
+```
+
+A real installer (one command that copies itself into place and sets up
+`PATH`) is a natural next step once this is used by more than the two of
+us, not built yet.

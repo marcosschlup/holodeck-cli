@@ -10,9 +10,14 @@ import { listAvailableModels } from './agentSession.js'
 import { loadClaudeToken, loadServerUrl, setClaudeToken, setServerUrl } from './config.js'
 import { runDaemon } from './daemon.js'
 import { resolveAgentIdentity } from './holodeck.js'
+import { getAgentAccessToken, listMyAgents } from './holodeckApi.js'
+import { loginWithBrowser } from './holodeckLogin.js'
+import { loadLoginCredential, saveLoginCredential } from './loginCredential.js'
+import { findMcpServerArgs, upsertMcpServerEntry } from './mcpConfig.js'
 import { sendIpcRequest, type IpcResponse } from './ipc.js'
 import { formatLogContent, formatLogLine } from './logFormat.js'
 import { deleteLog, followLog, logFileExists, readLog } from './personaLog.js'
+import { loadPersonas } from './store.js'
 
 // A detached background daemon needs to actually run this same script a
 // second time as its own process — there's no separate daemon binary to
@@ -188,6 +193,38 @@ async function watchPersonaLog(persona: string, raw: boolean, signal: AbortSigna
   )
 }
 
+// An Agent's name (e.g. "Claude Desktop") is free text, but a `.mcp.json`
+// server key becomes a shell word in the printed launch command
+// (`server:holodeck-<name>`, `channel add` below) — an untouched space or
+// other punctuation there would silently break copy-paste. The exact
+// agent name still travels correctly as `channel run`'s own argument
+// (inside a JSON args array, never shell-parsed), so this slug is only
+// ever used for the server key/display, never for resolving the
+// credential back.
+function slugifyForMcpServerName(agentName: string): string {
+  const slug = agentName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return slug === '' ? 'agent' : slug
+}
+
+// No command takes an Agent's name as an argument (HOL-132) - choosing one is
+// always a selector. For the commands that operate on personas registered
+// with the local daemon, the choices are the locally registered personas.
+async function pickPersona(message: string): Promise<string | undefined> {
+  const personas = loadPersonas()
+  if (personas.length === 0) {
+    console.log('No personas registered.')
+    return undefined
+  }
+  return select({ message, choices: personas.map((p) => ({ name: p.name, value: p.name })) })
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 async function main(): Promise<void> {
   // Skeleton only for `path add`/`path set`/`logs`/`restart` — those need
   // the Agent SDK integration (not part of this epic yet). Every other
@@ -199,6 +236,98 @@ async function main(): Promise<void> {
   const program = new Command()
 
   program.name('holodeck').description('Run Holodeck Agents from this machine').version(readOwnVersion())
+
+  program
+    .command('login')
+    .description('Sign in to Holodeck in your browser — one login covers every Agent you own')
+    .action(async () => {
+      const serverUrl = loadServerUrl()
+      let tokens
+      try {
+        tokens = await loginWithBrowser(serverUrl)
+      } catch (error) {
+        console.log(`Sign-in failed: ${errorMessage(error)}`)
+        return
+      }
+      saveLoginCredential({ serverUrl, ...tokens })
+      // Proves the login works against Holodeck's CLI API, not merely that
+      // a token came back - the same API every setup command relies on.
+      try {
+        const agents = await listMyAgents()
+        console.log(`Signed in to ${serverUrl}. You own ${agents.length} Agent(s).`)
+      } catch (error) {
+        console.log(`Signed in, but Holodeck's CLI API didn't accept the login: ${errorMessage(error)}`)
+        return
+      }
+      console.log('Next: set up an Agent, for example `holodeck channel add` in a project. `holodeck --help` lists the other options.')
+    })
+
+  // Push events into a live Claude Code session via its own Channels
+  // feature (HOL-122/130), not the local daemon `register`/`agent`
+  // commands below manage — a Channel is a subprocess Claude Code itself
+  // spawns per session, over stdio, from a `.mcp.json` entry, so there's
+  // no persona to register with anything running on this machine ahead of
+  // time; `channel add` only needs the login from `holodeck login` above.
+  // No command in this CLI takes an Agent's name as an argument (HOL-132):
+  // choosing an Agent is always a selector, listing only the Agents that
+  // make sense for what is being set up.
+  const channel = program.command('channel').description('Push Task events into a live Claude Code session')
+
+  channel
+    .command('add')
+    .description('Wire up a Channel for one of your Agents in the current project directory')
+    .action(async () => {
+      let agents
+      try {
+        agents = await listMyAgents('channel')
+      } catch (error) {
+        console.log(errorMessage(error))
+        return
+      }
+      if (agents.length === 0) {
+        console.log("You don't own any Channel Agents yet. Create one in Holodeck (Manage Agents, type: Channel), then run this again.")
+        return
+      }
+
+      const agent = await select({
+        message: 'Which Agent should this Channel run as?',
+        choices: agents.map((a) => ({ name: a.name, value: a })),
+      })
+
+      // Ask for a token now, before writing anything: proves this Agent can
+      // actually run as a Channel (right type, still exists) instead of
+      // leaving a `.mcp.json` entry that only fails once a session starts.
+      try {
+        await getAgentAccessToken(agent.id, 'channel')
+      } catch (error) {
+        console.log(`Couldn't get a token for "${agent.name}": ${errorMessage(error)}`)
+        return
+      }
+
+      // Names aren't unique, so two Agents can slug to the same server
+      // name - never overwrite another Agent's entry.
+      let serverName = `holodeck-${slugifyForMcpServerName(agent.name)}`
+      const existingArgs = findMcpServerArgs(process.cwd(), serverName)
+      if (existingArgs && existingArgs[2] !== agent.id) {
+        serverName = `${serverName}-${agent.id.slice(-6)}`
+      }
+
+      upsertMcpServerEntry(process.cwd(), serverName, 'holodeck', ['channel', 'run', agent.id])
+      console.log(`Added "${serverName}" (${agent.name}) to .mcp.json in this directory.`)
+      console.log('Channels is in research preview — Claude Code needs this flag today to load it:\n')
+      console.log(`  claude --dangerously-load-development-channels server:${serverName}\n`)
+      console.log(
+        'Run that command to start a session with this Channel active. A session that\'s already open needs to be closed and reopened with it, not reloaded (Claude Code only reads .mcp.json at startup).',
+      )
+    })
+
+  channel
+    .command('run')
+    .description("The Channel's own MCP server — Claude Code spawns this itself over stdio, don't run it by hand")
+    .argument('<agentId>', "the Agent's id, as written into .mcp.json by `channel add`")
+    .action((agentId: string) => {
+      notImplemented(`channel run ${agentId}`)
+    })
 
   program
     .command('register')
@@ -337,13 +466,12 @@ async function main(): Promise<void> {
   program
     .command('logs')
     .description("Show a persona's own session activity log, formatted for humans by default")
-    .argument('[persona]', "the Agent's name, as shown in `holodeck list`")
     .option('--follow', 'keep streaming new log lines')
     .option('--raw', 'show the original JSONL instead of the human-readable summary')
     .option('--clear', "erase a persona's log without touching its registration")
-    .action(async (persona: string | undefined, options: { follow?: boolean; raw?: boolean; clear?: boolean }) => {
+    .action(async (options: { follow?: boolean; raw?: boolean; clear?: boolean }) => {
+      const persona = await pickPersona("Which persona's log?")
       if (!persona) {
-        console.log("The daemon's own log isn't captured to a file yet — run `holodeck start --foreground` to watch it live.")
         return
       }
       if (options.clear) {
@@ -401,8 +529,11 @@ async function main(): Promise<void> {
   agent
     .command('pause')
     .description('Disconnect a persona without forgetting it — the token stays registered')
-    .argument('<persona>', "the Agent's name, as shown in `holodeck list`")
-    .action(async (persona: string) => {
+    .action(async () => {
+      const persona = await pickPersona('Which persona should be paused?')
+      if (!persona) {
+        return
+      }
       const response = await sendIpcRequest({ op: 'pause', name: persona })
       if (isPauseOk(response)) {
         console.log(
@@ -418,8 +549,11 @@ async function main(): Promise<void> {
   agent
     .command('unpause')
     .description('Reconnect a paused persona, without needing its token again')
-    .argument('<persona>', "the Agent's name, as shown in `holodeck list`")
-    .action(async (persona: string) => {
+    .action(async () => {
+      const persona = await pickPersona('Which persona should be unpaused?')
+      if (!persona) {
+        return
+      }
       const daemon = await ensureDaemonRunning()
       if (daemon === null) {
         console.log("Couldn't start the daemon.")
@@ -440,8 +574,11 @@ async function main(): Promise<void> {
   agent
     .command('forget')
     .description("Remove a persona entirely — you'll need its token again to bring it back")
-    .argument('<persona>', "the Agent's name, as shown in `holodeck list`")
-    .action(async (persona: string) => {
+    .action(async () => {
+      const persona = await pickPersona('Which persona should be forgotten?')
+      if (!persona) {
+        return
+      }
       const response = await sendIpcRequest({ op: 'forget', name: persona })
       if (isForgetOk(response)) {
         console.log(response.removed ? `Forgot "${persona}".` : `No persona named "${persona}" was registered.`)
@@ -478,6 +615,10 @@ async function main(): Promise<void> {
     .action(() => {
       console.log(`Server: ${loadServerUrl()}`)
       console.log(`Claude token: ${loadClaudeToken() ? 'set' : 'not set'}`)
+      const login = loadLoginCredential()
+      console.log(
+        login ? `Signed in (OAuth) to ${login.serverUrl}` : 'Signed in (OAuth): no. Run `holodeck login` to sign in.',
+      )
     })
 
   const path = program.command('path').description("Manage a persona's working directory")
@@ -511,6 +652,8 @@ async function main(): Promise<void> {
     'after',
     `
 Common commands:
+  holodeck login                   Sign in to Holodeck in your browser
+  holodeck channel add             Wire up a Channel for one of your Agents here
   holodeck register                Register a new Agent (interactive)
   holodeck list                   List every registered Agent
   holodeck agent pause <name>     Pause an Agent (keeps its token)

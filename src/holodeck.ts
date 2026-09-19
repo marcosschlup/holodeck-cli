@@ -1,10 +1,13 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
-// Holodeck's own frontend defaults to this same address when no explicit
-// config is given (PLAN.md 9's SignIn.tsx note, `VITE_API_URL ?? 'http://localhost:3000'`)
-// — the local backend's dev default, not a hosted service this CLI assumes exists.
-export const DEFAULT_SERVER_URL = 'http://localhost:3000'
+// The hosted Holodeck, so a first-time user needs no configuration. Anyone
+// self-hosting (or developing Holodeck itself against a local backend) points
+// the CLI elsewhere with `holodeck config set-server`. Note `holodeck login`
+// only works against a deployed backend: its OAuth client_id is a fixed
+// https URL on this same host (holodeckLogin.ts), which a local backend
+// doesn't recognize as the holodeck CLI.
+export const DEFAULT_SERVER_URL = 'https://api.holodeck-tracker.com'
 
 // Identifies requests as coming from this CLI, not a browser or some other
 // MCP client — standard `User-Agent`, not a custom header, so it shows up
