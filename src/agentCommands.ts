@@ -37,12 +37,22 @@ function slugify(agentName: string): string {
 
 const isInteractive = () => Boolean(process.stdin.isTTY && process.stdout.isTTY)
 
+interface RunnerSettings {
+  model: string | null
+  effort: string | null
+}
+
+const NO_RUNNER_SETTINGS: RunnerSettings = { model: null, effort: null }
+
 interface ConfiguredAgent {
   config: ChannelConfig
   // The Agent's CURRENT name in Holodeck (the file only has the slug it had
   // when it was set up, which goes stale on a rename), or the file's own
   // name when Holodeck couldn't be asked.
   name: string
+  // The Agent's model (HOL-138) and effort (HOL-140) in Holodeck, passed to
+  // Claude Code; null when Holodeck couldn't be asked or none is set.
+  runner: RunnerSettings
   available: boolean
   problem?: string
 }
@@ -67,19 +77,19 @@ async function resolveConfigured(
       return { error: error.message }
     }
     return {
-      entries: configs.map((config) => ({ config, name: nameFromFile(config), available: true })),
+      entries: configs.map((config) => ({ config, name: nameFromFile(config), runner: NO_RUNNER_SETTINGS, available: true })),
       namesMayBeStale: true,
     }
   }
   const entries = configs.map((config): ConfiguredAgent => {
     const agent = agents.find((candidate) => candidate.id === config.agentId)
     if (!agent) {
-      return { config, name: nameFromFile(config), available: false, problem: 'no longer available' }
+      return { config, name: nameFromFile(config), runner: NO_RUNNER_SETTINGS, available: false, problem: 'no longer available' }
     }
-    if (agent.connectionMode !== 'channel') {
-      return { config, name: agent.name, available: false, problem: 'no longer set up to work this way' }
+    if (agent.connectionMode !== 'channel' || !canRunVendor(agent)) {
+      return { config, name: agent.name, runner: NO_RUNNER_SETTINGS, available: false, problem: 'no longer set up to work this way' }
     }
-    return { config, name: agent.name, available: true }
+    return { config, name: agent.name, runner: { model: agent.model, effort: agent.effort }, available: true }
   })
   return { entries, namesMayBeStale: false }
 }
@@ -87,6 +97,10 @@ async function resolveConfigured(
 // The Agent types `agent setup` knows how to prepare. Background Agents
 // (`headless`) join when HOL-131 adds their setup.
 const SETUP_MODES: AgentSummary['connectionMode'][] = ['channel']
+
+// The runner `agent start` knows how to launch is Claude Code (HOL-138); an
+// Agent of another vendor would need its own launcher.
+const canRunVendor = (agent: AgentSummary) => agent.vendor === 'claude'
 
 async function setUpChannelAgent(agent: AgentSummary, verbose: boolean): Promise<ChannelConfig | undefined> {
   const cwd = process.cwd()
@@ -118,7 +132,7 @@ async function setUpChannelAgent(agent: AgentSummary, verbose: boolean): Promise
   console.log('Start it with: holodeck agent start')
   if (verbose) {
     console.log(`\nSetup file: ${relativePath}`)
-    console.log(`Starting it runs: claude ${claudeArguments({ relativePath, serverName, agentId: agent.id }, []).join(' ')}`)
+    console.log(`Starting it runs: claude ${claudeArguments({ relativePath, serverName, agentId: agent.id }, [], agent).join(' ')}`)
     console.log(
       'Claude Code may print "no MCP server configured with that name" at startup; the Agent still loads. Each Agent has its own file, so other Agents can work from this same folder in their own sessions.',
     )
@@ -131,8 +145,13 @@ async function setUpChannelAgent(agent: AgentSummary, verbose: boolean): Promise
   return { relativePath, serverName, agentId: agent.id }
 }
 
-function claudeArguments(config: ChannelConfig, extra: string[]): string[] {
+// The Agent's model and effort from Holodeck go first as `--model` and
+// `--effort`; one the person passes themselves after `--` wins over it.
+function claudeArguments(config: ChannelConfig, extra: string[], runner: RunnerSettings): string[] {
+  const passed = (flag: string) => extra.some((argument) => argument === flag || argument.startsWith(`${flag}=`))
   return [
+    ...(runner.model !== null && !passed('--model') ? ['--model', runner.model] : []),
+    ...(runner.effort !== null && !passed('--effort') ? ['--effort', runner.effort] : []),
     '--mcp-config',
     config.relativePath,
     '--dangerously-load-development-channels',
@@ -148,7 +167,7 @@ async function startConfigured(entry: ConfiguredAgent, extra: string[], verbose:
     process.exitCode = 1
     return
   }
-  const args = claudeArguments(entry.config, extra)
+  const args = claudeArguments(entry.config, extra, entry.runner)
   console.log(`Starting ${entry.name}...`)
   if (verbose) {
     console.log(`  claude ${args.join(' ')}`)
@@ -170,8 +189,8 @@ export async function runAgentSetup(options: { verbose?: boolean } = {}): Promis
     return
   }
 
-  const ready = agents.filter((agent) => SETUP_MODES.includes(agent.connectionMode))
-  const notYet = agents.filter((agent) => agent.connectionMode === 'headless' && !SETUP_MODES.includes('headless'))
+  const ready = agents.filter((agent) => SETUP_MODES.includes(agent.connectionMode) && canRunVendor(agent))
+  const notYet = agents.filter((agent) => agent.connectionMode !== 'session' && !ready.includes(agent))
   if (ready.length === 0) {
     console.log(
       "None of your Agents can be set up here yet. In Holodeck, create an Agent of type Channel (Manage Agents), then run this again.",
@@ -197,7 +216,7 @@ export async function runAgentSetup(options: { verbose?: boolean } = {}): Promis
     return
   }
   if (await confirm({ message: `Start ${agent.name} now?`, default: true })) {
-    await startConfigured({ config: configured, name: agent.name, available: true }, [], Boolean(options.verbose))
+    await startConfigured({ config: configured, name: agent.name, runner: { model: agent.model, effort: agent.effort }, available: true }, [], Boolean(options.verbose))
   }
 }
 

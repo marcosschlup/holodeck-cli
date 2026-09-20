@@ -41,6 +41,12 @@ export interface AgentSummary {
   id: string
   name: string
   connectionMode: AgentConnectionMode
+  // Who runs this Agent, on which model (HOL-138) and at which effort
+  // (HOL-140). Null for a session Agent; a null model or effort means the
+  // runner decides.
+  vendor: string | null
+  model: string | null
+  effort: string | null
 }
 
 // Only modes a CLI process can run as - mirrors the backend's own purposes.
