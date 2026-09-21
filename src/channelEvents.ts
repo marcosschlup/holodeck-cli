@@ -2,6 +2,7 @@ import type {
   AgentAddedToProjectEvent,
   AgentInstructionSentEvent,
   AgentInstructionsUpdatedEvent,
+  AgentMentionedEvent,
   AgentRemovedFromProjectEvent,
   ScheduledCheckDueEvent,
   SubscriptionMatchedEvent,
@@ -25,6 +26,7 @@ export type ChannelEvent =
   | AgentInstructionsUpdatedEvent
   | AgentAddedToProjectEvent
   | AgentRemovedFromProjectEvent
+  | AgentMentionedEvent
 
 // The push events are deliberately minimal ("something changed, go look",
 // PLAN.md 9: a push is never the authoritative payload), so each body says
@@ -71,6 +73,19 @@ export function describeChannelEvent(event: ChannelEvent): ChannelNotification {
           'Your persona/instructions were just edited in Holodeck. Re-read them with get_my_context, and check with list_my_subscriptions whether your event subscriptions still make sense.',
         meta: { event: event.type },
       }
+    case 'agent_mentioned': {
+      const where = event.data.taskDisplayId ? `task ${event.data.taskDisplayId}` : 'an intention'
+      const who = event.data.authorName ? event.data.authorName : 'Someone'
+      return {
+        content: `${who} tagged you in a note on ${where} in Holodeck. Read it with the list_my_mentions tool (reading it is what marks it as seen), then act on what it asks and answer with add_interaction.`,
+        meta: compact({
+          event: event.type,
+          project_id: event.projectId,
+          task_id: event.taskId,
+          mention_id: event.data.mentionId,
+        }),
+      }
+    }
     case 'agent_added_to_project':
       return {
         content: `You were added to a Holodeck project (id ${event.projectId}). Consider whether it needs event subscriptions of its own (subscribe_to_event).`,
@@ -106,7 +121,7 @@ export function shouldReconcileOnConnect(droppedAt: number | undefined, now: num
 // there is nothing to do, since this starts a turn in the session by itself.
 export function describeChannelConnected(agentName: string): ChannelNotification {
   return {
-    content: `You are now connected to Holodeck as ${agentName}. While this session was closed, or the connection was down, events may have been missed. Check what needs your attention now: Tasks assigned to you that aren't finished (list_tasks with assignedToMe), and any direct instruction from your owner you haven't read (list_my_instructions). Act on what you find. If nothing needs attention, don't say anything.`,
+    content: `You are now connected to Holodeck as ${agentName}. While this session was closed, or the connection was down, events may have been missed. Check what needs your attention now: Tasks assigned to you that aren't finished (list_tasks with assignedToMe), any direct instruction from your owner you haven't read (list_my_instructions), and any note that tagged you that you haven't read (list_my_mentions). Act on what you find. If nothing needs attention, don't say anything.`,
     meta: { event: 'connected' },
   }
 }

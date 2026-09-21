@@ -75,6 +75,19 @@ export interface AgentRemovedFromProjectEvent {
   projectId: string
 }
 
+// Mirrors backend/src/lib/projectEvents.ts's `pushMentionedAgents` (HOL-145,
+// docs/mentions.md in the task-manager repo): someone tagged this Agent with
+// @handle in a note. Minimal like the pushes above, with just enough to word the
+// notification; the persona calls list_my_mentions to read the note (which is what
+// marks it read). `taskId` is the Task's internal id, `taskDisplayId` what get_task
+// takes; one of `taskDisplayId` and `intentionId` is set.
+export interface AgentMentionedEvent {
+  type: 'agent_mentioned'
+  projectId?: string
+  taskId?: string
+  data: { mentionId: string; interactionId?: string; taskDisplayId?: string; intentionId?: string; authorName?: string }
+}
+
 // PLAN.md "Web UI: remote Stop" (HOL-77) — the owner clicked "Stop" in the
 // Web UI. Same shape as the other minimal pushes: no payload beyond the
 // type itself, this connection already knows which persona it is.
@@ -122,6 +135,8 @@ export interface PersonaConnectionHandlers {
   onAgentAddedToProject?: (event: AgentAddedToProjectEvent) => void
   // Fired when this Agent is removed from a Project.
   onAgentRemovedFromProject?: (event: AgentRemovedFromProjectEvent) => void
+  // Fired when someone tags this Agent in a note (HOL-145).
+  onAgentMentioned?: (event: AgentMentionedEvent) => void
   // Fired when the owner clicks "Stop" in the Web UI (HOL-77) — the
   // handler is expected to actually stop the persona (close the session,
   // this connection, and report the disconnect), same as a local
@@ -176,6 +191,7 @@ export function startPersonaConnection(
       | AgentInstructionsUpdatedEvent
       | AgentAddedToProjectEvent
       | AgentRemovedFromProjectEvent
+      | AgentMentionedEvent
       | AgentStopRequestedEvent
       | { type: string }
     if (event.type === 'health_check') {
@@ -208,6 +224,10 @@ export function startPersonaConnection(
       const removed = event as AgentRemovedFromProjectEvent
       log(`removed from project ${removed.projectId}`)
       handlers?.onAgentRemovedFromProject?.(removed)
+    } else if (event.type === 'agent_mentioned') {
+      const mentioned = event as AgentMentionedEvent
+      log(`mentioned in ${mentioned.data.taskDisplayId ?? 'an intention'}`)
+      handlers?.onAgentMentioned?.(mentioned)
     } else if (event.type === 'agent_stop_requested') {
       log('stop requested from Web UI')
       handlers?.onAgentStopRequested?.(event as AgentStopRequestedEvent)

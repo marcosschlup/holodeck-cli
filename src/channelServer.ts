@@ -82,7 +82,7 @@ function createLogger(agentId: string): (message: string) => void {
 // the same text a session connected to /mcp directly would have been given.
 function buildInstructions(agentName: string, holodeckInstructions: string | undefined): string {
   const channelInstructions = [
-    `You are connected to Holodeck as the Agent "${agentName}". Holodeck pushes events to you as <channel ... event="..."> tags: a subscription of yours matched a Task, your owner sent you a direct instruction, a scheduled check of yours is due, your own setup changed (instructions edited, added to or removed from a project), or you just connected and should check what's pending.`,
+    `You are connected to Holodeck as the Agent "${agentName}". Holodeck pushes events to you as <channel ... event="..."> tags: a subscription of yours matched a Task, your owner sent you a direct instruction, someone tagged you in a note, a scheduled check of yours is due, your own setup changed (instructions edited, added to or removed from a project), or you just connected and should check what's pending.`,
     "Each event body names the Holodeck tool to reach for. Those tools are available in this session through this same server: they act as this Agent, and their names are Holodeck's own (list_tasks, get_task, add_interaction, set_resolution, ...). Nothing you write in the conversation reaches Holodeck by itself; only calling those tools does.",
   ].join('\n\n')
   return holodeckInstructions ? `${channelInstructions}\n\n---\n\n${holodeckInstructions}` : channelInstructions
@@ -191,6 +191,7 @@ export async function runChannel(agentId: string, version: string): Promise<void
     onAgentInstructionsUpdated: pushEvent,
     onAgentAddedToProject: pushEvent,
     onAgentRemovedFromProject: pushEvent,
+    onAgentMentioned: pushEvent,
     // The owner's "Stop" in the Web UI: tell the session, then go offline
     // (stop() also reports the disconnect, so the Web UI's dot flips). The
     // process stays up but idle - exiting would make Claude Code show the

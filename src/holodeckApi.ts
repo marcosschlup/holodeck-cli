@@ -47,6 +47,11 @@ export interface AgentSummary {
   vendor: string | null
   model: string | null
   effort: string | null
+  // The Organization the Agent belongs to (HOL-149). Not used yet: there is one
+  // Organization per person today; kept so the selectors can label Agents by it
+  // once there can be several.
+  organizationId: string
+  organizationName: string
 }
 
 // Only modes a CLI process can run as - mirrors the backend's own purposes.
