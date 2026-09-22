@@ -19,6 +19,8 @@ import { sendIpcRequest, type IpcResponse } from './ipc.js'
 import { formatLogContent, formatLogLine } from './logFormat.js'
 import { deleteLog, followLog, logFileExists, readLog } from './personaLog.js'
 import { loadPersonas } from './store.js'
+import { runDoctor } from './doctor.js'
+import { runUninstall } from './uninstall.js'
 import { readOwnVersion } from './version.js'
 
 // A detached background daemon needs to actually run this same script a
@@ -625,6 +627,20 @@ async function main(): Promise<void> {
     .argument('<path>', 'new primary working directory')
     .action((persona: string, dirPath: string) => {
       notImplemented(`path set ${persona} ${dirPath}`)
+    })
+
+  program
+    .command('doctor')
+    .description('Check this machine for common problems (holodeck/claude on PATH, signed in, version) — diagnosis only, fixes nothing itself')
+    .action(() => {
+      runDoctor()
+    })
+
+  program
+    .command('uninstall')
+    .description('Remove the holodeck binary and its PATH entry from this machine')
+    .action(async () => {
+      await runUninstall()
     })
 
   // Commander's own command list (above) is alphabetical/registration-order

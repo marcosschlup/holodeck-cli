@@ -116,6 +116,9 @@ holodeck agent list                The Agents set up in this folder
 
 holodeck config set-server <url>   Which Holodeck server to talk to (machine-wide)
 holodeck config show               Show the current settings
+
+holodeck doctor                    Check this machine for common problems (diagnosis only)
+holodeck uninstall                 Remove the holodeck binary and its PATH entry
 ```
 
 `--verbose` on `setup`/`start` also prints the underlying `claude`
