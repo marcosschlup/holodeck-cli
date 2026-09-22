@@ -1,167 +1,110 @@
-# Agent Connector
+# Holodeck CLI
 
-The `holodeck` CLI — lets a [Holodeck](https://github.com) Agent run as a
-`connector`: a long-running local process that keeps an Agent's identity
-connected, runs a real Claude Agent SDK session for it, and reacts to
-what happens in Holodeck, instead of only being driven by a
-human-started session.
+The `holodeck` CLI puts one of your [Holodeck](https://github.com) Agents to
+work from a project folder on your own machine, as a real Claude Code
+session that stays reachable: it gets pushed a notification the moment
+something relevant happens in Holodeck (a Task assigned to it, a mention,
+a block answered), instead of only reacting when someone manually starts
+a session.
 
-This is a companion project to Holodeck's own `task-manager` repo, not a
-package inside it. Full design context (why it exists, the Agent
-identity/token model, the health-check and push-channel design, the
-sandboxing/permissions model) lives in that repo's `PLAN.md`, section 9
-("Agent Connector"), until this repo grows enough of its own conventions
-to stand on its own.
+This is a companion project to Holodeck's own main repo (`task-manager`),
+not a package inside it. Full design context (connection modes, identity
+model, health checks, the push channel) lives in that repo's `PLAN.md`,
+section 9 ("Channel and headless").
 
-## Status
+## Before you start
 
-The daemon, local IPC channel, token persistence, the live `/agent/events`
-connection (online/offline status, graceful disconnect), and a real
-Claude Agent SDK session per persona are all working — a registered
-persona actually runs, connects to Holodeck's own MCP tools, and checks
-for assigned work when it connects or on `holodeck restart`. **Not built
-yet**: `path add`/`path set` (adding/changing a persona's working
-directory live), and tier 2/3 native OS-level sandboxing (today's
-`canUseTool` policy is software-only — see PLAN.md 9).
+You need:
+
+- **A Holodeck account**, with at least one Agent of type **Channel**
+  (created from Holodeck's Web UI: **Manage your agents → Create agent**,
+  connection type **Channel**) registered into the Project you want it to
+  work in (that Project's **Add member** dialog, under **Your agent**).
+- **[Claude Code](https://code.claude.com/docs/en/setup) installed and
+  already signed in** on this machine — the CLI starts a real `claude`
+  session, so whatever gets you a working `claude` session on its own
+  (subscription login, or an API key) is enough. Verify with
+  `claude --version`.
 
 ## Quickstart
 
-### 1. Create the Agent in Holodeck
-
-1. Sign in to Holodeck and open **Manage your agents** → **Create
-   agent**.
-2. Pick **connector** as the connection type (not `session`) — that's
-   what makes it eligible to run through Agent Connector at all.
-3. Fill in a name and, optionally, a persona/instructions.
-4. Holodeck shows the Agent's token **once**, right after creation. Copy
-   it now — it's the last time you'll see it; if you lose it, revoke the
-   Agent and create a new one, or ask a project owner to regenerate it.
-5. Open the Project you want this Agent to work in → **Add member** →
-   pick it under **Your agent** → **Add agent**. An Agent isn't usable in
-   a Project until it's explicitly added here, even if you own both.
-
-### 2. Set up Anthropic auth (one time per machine)
-
-Agent Connector runs a persona's Claude session unattended, so it can't
-use the normal interactive browser login. It authenticates with a
-long-lived OAuth token instead, tied to your Claude Pro/Max/Team/
-Enterprise subscription (not per-token API billing).
-
-This needs the Claude Code CLI installed on this machine — if you don't
-have it yet:
-
-```powershell
-# Windows PowerShell
-irm https://claude.ai/install.ps1 | iex
-```
-
-(macOS/Linux/WSL: `curl -fsSL https://claude.ai/install.sh | bash`. Other
-options — Homebrew, WinGet, npm, Linux package managers — are in
-[Claude Code's own install docs](https://code.claude.com/docs/en/setup).)
-Verify it worked with `claude --version`.
-
-Then generate the token:
+### 1. Sign in
 
 ```bash
-claude setup-token
+holodeck login
 ```
 
-This opens a browser once for you to approve access, then prints a token
-to your terminal — it isn't saved anywhere by that command, so copy it
-before it scrolls away. Then hand it to Agent Connector:
+Opens your browser once, against Holodeck's own OAuth. One login on this
+machine covers every Agent you own — you won't be asked again until it
+expires (30 days).
 
-```bash
-holodeck config set-claude-token <token>
-```
-
-One token covers every persona registered on this machine.
-(`ANTHROPIC_API_KEY` support, as an alternative to a Claude subscription,
-is planned but not built yet.)
-
-If a `CLAUDE_CODE_OAUTH_TOKEN` environment variable is already set in
-whatever environment starts the daemon (a persistent machine-level
-variable, a systemd unit, Docker, etc.), it's used instead of the config
-value — but a plain `export` in a terminal won't reach it: the daemon
-runs detached and only inherits the environment of whoever started it at
-that moment, not of a shell that exports something afterward. `config
-set-claude-token` is the reliable path for everyone else.
-
-### 3. Point Agent Connector at your Holodeck server
-
-Defaults to the hosted Holodeck, `https://api.holodeck-tracker.com`. Only
-needed if you self-host:
+By default this talks to the hosted Holodeck,
+`https://api.holodeck-tracker.com`. Only needed if you self-host:
 
 ```bash
 holodeck config set-server https://your-holodeck-instance.example.com
 ```
 
-### 4. Register the Agent
+### 2. Set up an Agent in this folder
 
 ```bash
-holodeck register
+holodeck agent setup
 ```
 
-An interactive wizard — no flags to remember:
+Lists your Channel Agents and asks which one to prepare here. Writes one
+small config file under `.holodeck/` (safe to add to `.gitignore` — it
+names your own Agent, so a teammate shouldn't get it from a shared
+repository) and offers to start it right away.
 
-1. **Agent token** — validated against Holodeck immediately; a bad token
-   (or wrong `config set-server`) fails right here.
-2. **Model** — Agent Connector opens a brief throwaway session just to
-   ask Claude which models this account can use, then lets you pick one
-   from that live list. If Claude auth isn't set up yet (step 2 above),
-   this is where you'll find out, with a clear message telling you what
-   to run first.
-3. **Working directory** — defaults to wherever you run the command
-   (`.`), resolved to an absolute path automatically.
-
-Registering starts the local daemon if it isn't already running, and the
-persona's session comes up immediately — it checks Holodeck for any
-Tasks assigned to it as soon as it connects. Add `--watch` to stay
-attached and watch its log live right after (Ctrl+C to detach — the
-persona itself keeps running).
-
-### 5. Check on it
+### 3. Start it
 
 ```bash
-holodeck list
+holodeck agent start
 ```
 
-Shows every registered persona and its live connection status
-(`connected` / `connecting` / `reconnecting` / `paused`). The same status
-shows as an online/offline dot next to the Agent in the Holodeck Web UI.
+Opens a real Claude Code session for that Agent, with its model and
+effort (set in Holodeck) already applied. While it's running, it reacts
+live to what happens in its Projects — no need to keep asking it to check.
+Anything after `--` goes straight to Claude Code:
 
 ```bash
-holodeck logs <persona>
+holodeck agent start -- --resume
 ```
 
-Shows that persona's session activity, summarized for reading (tool
-calls, replies, results — internal bookkeeping like rate-limit pings is
-hidden). Add `--follow` to keep streaming new lines, `--raw` for the
-original JSONL instead, or `--clear` to erase that persona's log without
-touching its registration.
+Ctrl+C ends the session the same way it would in Claude Code directly.
+
+### 4. Check what's set up
+
+```bash
+holodeck agent list
+```
+
+The Agents set up in this folder, and whether each can still be started
+(an Agent removed from Holodeck, or switched to a different connection
+type, shows why it can't).
 
 ## Everyday commands
 
 ```
-holodeck register [--watch]                Register a new Agent (interactive wizard)
-holodeck list                              List every registered persona (alias: ps)
-holodeck status                            Is the local daemon running
-holodeck restart <persona>                 Restart one persona's Claude session
-holodeck logs <persona> [--follow] [--raw] [--clear]   Show/stream/clear a persona's session activity
+holodeck login                     Sign in to Holodeck in your browser
+holodeck agent setup [--verbose]   Prepare one of your Agents to work in this folder
+holodeck agent start [-- ...]      Start an Agent set up in this folder
+holodeck agent list                The Agents set up in this folder
 
-holodeck agent pause <persona>             Disconnect, keep the token
-holodeck agent unpause <persona>           Reconnect, no token needed again
-holodeck agent forget <persona>            Remove entirely (needs the token again to bring back)
-
-holodeck start [--foreground]              Start the local daemon
-holodeck stop                              Shut the daemon down (every persona disconnects, none are forgotten)
-
-holodeck config set-server <url>           Which Holodeck server to talk to (machine-wide)
-holodeck config set-claude-token <token>   Claude OAuth token every persona authenticates with
-holodeck config show                       Show the current settings
-
-holodeck path add <persona> <path>         Not built yet
-holodeck path set <persona> <path>         Not built yet
+holodeck config set-server <url>   Which Holodeck server to talk to (machine-wide)
+holodeck config show               Show the current settings
 ```
+
+`--verbose` on `setup`/`start` also prints the underlying `claude`
+command and config file path — useful for troubleshooting, not needed for
+everyday use.
+
+## Not built yet
+
+- **Headless Agents** (an Agent that runs a Task in the background
+  without a standing session) — planned, not available from this CLI yet.
+- **An installer.** Building only produces a binary; see "Packaging a
+  standalone build" below for what that involves today.
 
 ## Development
 
