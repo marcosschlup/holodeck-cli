@@ -16,8 +16,8 @@ interface LatestRelease {
   version: string // "v" stripped, e.g. "0.1.1"
 }
 
-async function fetchLatestRelease(): Promise<LatestRelease> {
-  const response = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`)
+async function fetchLatestRelease(signal?: AbortSignal): Promise<LatestRelease> {
+  const response = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { signal })
   if (!response.ok) {
     throw new Error(`Couldn't reach the GitHub Releases API (HTTP ${response.status}).`)
   }
@@ -79,8 +79,12 @@ export interface UpdateStatus {
   hasUpdate: boolean
 }
 
-export async function checkForUpdate(currentVersion: string): Promise<UpdateStatus> {
-  const latest = await fetchLatestRelease()
+// `signal` bounds how long this waits — used by the daily update notice
+// (updateNotice.ts), which must never hang a command over a slow or dead
+// network; `holodeck update --check` passes none, since there a person
+// explicitly asked and can wait for a real answer.
+export async function checkForUpdate(currentVersion: string, signal?: AbortSignal): Promise<UpdateStatus> {
+  const latest = await fetchLatestRelease(signal)
   return { currentVersion, latestVersion: latest.version, hasUpdate: isNewer(latest.version, currentVersion) }
 }
 

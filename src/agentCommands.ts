@@ -8,6 +8,8 @@ import {
   type AgentSummary,
 } from './holodeckApi.js'
 import { findChannelConfigs, isMissingFromGitIgnore, isServerNameTaken, writeChannelConfig, type ChannelConfig } from './mcpConfig.js'
+import { maybeNoticeUpdate } from './updateNotice.js'
+import { readOwnVersion } from './version.js'
 
 // `holodeck agent setup` / `agent start` / `agent list` (HOL-135): the CLI as
 // seen from the AGENT's side. The user says "set up Adam" and "start Adam"; what
@@ -181,6 +183,7 @@ async function startConfigured(entry: ConfiguredAgent, extra: string[], verbose:
 }
 
 export async function runAgentSetup(options: { verbose?: boolean } = {}): Promise<void> {
+  await maybeNoticeUpdate(readOwnVersion())
   let agents: AgentSummary[]
   try {
     agents = await listMyAgents()
@@ -221,6 +224,7 @@ export async function runAgentSetup(options: { verbose?: boolean } = {}): Promis
 }
 
 export async function runAgentStart(extraArguments: string[], options: { verbose?: boolean } = {}): Promise<void> {
+  await maybeNoticeUpdate(readOwnVersion())
   const configs = findChannelConfigs(process.cwd())
   if (configs.length === 0) {
     console.log('No Agents are set up in this folder yet. Run: holodeck agent setup')

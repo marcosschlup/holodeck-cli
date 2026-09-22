@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process'
-import fs from 'node:fs'
-import { dirname, join, resolve as resolvePath } from 'node:path'
+import { resolve as resolvePath } from 'node:path'
 import { isSea } from 'node:sea'
-import { fileURLToPath } from 'node:url'
 import { input, password, select } from '@inquirer/prompts'
 import { Command } from 'commander'
 import { listAvailableModels } from './agentSession.js'
@@ -16,10 +14,12 @@ import { listMyAgents } from './holodeckApi.js'
 import { loginWithBrowser } from './holodeckLogin.js'
 import { loadLoginCredential, saveLoginCredential } from './loginCredential.js'
 import { applyUpdate, checkForUpdate, cleanUpOldBinary } from './update.js'
+import { maybeNoticeUpdate } from './updateNotice.js'
 import { sendIpcRequest, type IpcResponse } from './ipc.js'
 import { formatLogContent, formatLogLine } from './logFormat.js'
 import { deleteLog, followLog, logFileExists, readLog } from './personaLog.js'
 import { loadPersonas } from './store.js'
+import { readOwnVersion } from './version.js'
 
 // A detached background daemon needs to actually run this same script a
 // second time as its own process — there's no separate daemon binary to
@@ -44,27 +44,6 @@ void (async () => {
     await main()
   }
 })()
-
-// `package.json`'s own version, single source of truth for `holodeck
-// --version` rather than a hardcoded literal that could drift out of sync.
-// `../package.json` resolves consistently whether this runs as `src/cli.ts`
-// under tsx (dev) or as the built `dist/cli.js` (`npm run build`) — both
-// sit one directory below the package root. A SEA binary has no such
-// file next to it (the whole point is a single self-contained
-// executable), so `scripts/build-sea.mjs` bakes the version in at bundle
-// time via esbuild's `define`, replacing `__HOLODECK_SEA_VERSION__` with
-// a real string literal — falls through to the file read whenever that
-// replacement never happened (dev, and the plain `npm run build`).
-declare const __HOLODECK_SEA_VERSION__: string | undefined
-
-function readOwnVersion(): string {
-  if (typeof __HOLODECK_SEA_VERSION__ !== 'undefined') {
-    return __HOLODECK_SEA_VERSION__
-  }
-  const packageJsonPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json')
-  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8')) as { version: string }
-  return packageJson.version
-}
 
 type StatusOk = Extract<IpcResponse, { op: 'status' }>
 type RegisterOk = Extract<IpcResponse, { op: 'register' }>
@@ -257,6 +236,7 @@ async function main(): Promise<void> {
     .command('login')
     .description('Sign in to Holodeck in your browser — one login covers every Agent you own')
     .action(async () => {
+      await maybeNoticeUpdate(readOwnVersion())
       const serverUrl = loadServerUrl()
       let tokens
       try {

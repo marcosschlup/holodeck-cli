@@ -122,12 +122,16 @@ holodeck config show               Show the current settings
 command and config file path — useful for troubleshooting, not needed for
 everyday use.
 
+`login`, `agent setup` and `agent start` check once a day whether a newer
+release exists, and print a one-line nudge if so (never on `channel
+run`, whose stdout is the MCP protocol channel). Silent on any network
+failure — this is a courtesy, never something that blocks a command. Set
+`HOLODECK_NO_UPDATE_CHECK=1` to skip it entirely (e.g. in a script or CI).
+
 ## Not built yet
 
 - **Headless Agents** (an Agent that runs a Task in the background
   without a standing session) — planned, not available from this CLI yet.
-- **A notice when a newer version exists.** Until then, run `holodeck
-  update --check` yourself to find out.
 
 ## Development
 
