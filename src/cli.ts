@@ -15,6 +15,7 @@ import { resolveAgentIdentity } from './holodeck.js'
 import { listMyAgents } from './holodeckApi.js'
 import { loginWithBrowser } from './holodeckLogin.js'
 import { loadLoginCredential, saveLoginCredential } from './loginCredential.js'
+import { applyUpdate, checkForUpdate, cleanUpOldBinary } from './update.js'
 import { sendIpcRequest, type IpcResponse } from './ipc.js'
 import { formatLogContent, formatLogLine } from './logFormat.js'
 import { deleteLog, followLog, logFileExists, readLog } from './personaLog.js'
@@ -215,9 +216,42 @@ async function main(): Promise<void> {
     console.log(`"${command}" isn't implemented yet.`)
   }
 
+  // Best-effort, every invocation — see its own comment for why this isn't
+  // scoped to just the `update` command below.
+  cleanUpOldBinary()
+
   const program = new Command()
 
   program.name('holodeck').description('Run Holodeck Agents from this machine').version(readOwnVersion())
+
+  program
+    .command('update')
+    .description('Update to the latest release')
+    .option('--check', 'only report whether an update is available, without installing it')
+    .action(async (options: { check?: boolean }) => {
+      const currentVersion = readOwnVersion()
+      try {
+        if (options.check) {
+          const status = await checkForUpdate(currentVersion)
+          console.log(
+            status.hasUpdate
+              ? `holodeck ${status.latestVersion} is available (you have ${status.currentVersion}). Run: holodeck update`
+              : `holodeck ${status.currentVersion} is already the latest version.`,
+          )
+          return
+        }
+        const result = await applyUpdate(currentVersion)
+        if (!result.updated) {
+          console.log(`holodeck ${currentVersion} is already the latest version.`)
+          return
+        }
+        console.log(`Updated to holodeck ${result.version}.`)
+        console.log("A `channel run` session already open keeps running the old version until it's restarted (e.g. run `holodeck agent start` again).")
+      } catch (error) {
+        console.log(errorMessage(error))
+        process.exitCode = 1
+      }
+    })
 
   program
     .command('login')
@@ -625,6 +659,7 @@ async function main(): Promise<void> {
     `
 Common commands:
   holodeck login                   Sign in to Holodeck in your browser
+  holodeck update [--check]        Update to the latest release
   holodeck agent setup             Prepare one of your Agents to work in this folder
   holodeck agent start             Put an Agent to work
   holodeck agent list              The Agents set up in this folder

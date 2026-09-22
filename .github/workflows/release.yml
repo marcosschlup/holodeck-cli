@@ -101,7 +101,13 @@ jobs:
           path: assets
           merge-multiple: true
       - name: Combine the per-asset checksums into one file
-        run: cat assets/*.sha256 > assets/SHA256SUMS
+        # Removes the individual .sha256 files after combining them, so the
+        # `files:` glob below (which also matches `holodeck-*.sha256`)
+        # doesn't attach both the combined file and every one of its inputs
+        # to the Release.
+        run: |
+          cat assets/*.sha256 > assets/SHA256SUMS
+          rm assets/*.sha256
       - uses: softprops/action-gh-release@v2
         with:
           files: |

@@ -28,6 +28,28 @@ You need:
 
 ## Quickstart
 
+### 0. Install
+
+**macOS / Linux:**
+
+```bash
+curl -fsSL https://app.holodeck-tracker.com/install.sh | sh
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://app.holodeck-tracker.com/install.ps1 | iex
+```
+
+Downloads the right binary for your OS/architecture from the
+[latest release](https://github.com/marcosschlup/holodeck-cli/releases),
+verifies its checksum, and puts it on your `PATH`. Set
+`HOLODECK_VERSION`/`$env:HOLODECK_VERSION` first to install a specific
+version instead of the latest one. Once installed, `holodeck update`
+(below) is the faster way to update later — re-running either command
+above still works too, e.g. if `holodeck` itself is somehow broken.
+
 ### 1. Sign in
 
 ```bash
@@ -87,6 +109,7 @@ type, shows why it can't).
 
 ```
 holodeck login                     Sign in to Holodeck in your browser
+holodeck update [--check]          Update to the latest release
 holodeck agent setup [--verbose]   Prepare one of your Agents to work in this folder
 holodeck agent start [-- ...]      Start an Agent set up in this folder
 holodeck agent list                The Agents set up in this folder
@@ -103,8 +126,8 @@ everyday use.
 
 - **Headless Agents** (an Agent that runs a Task in the background
   without a standing session) — planned, not available from this CLI yet.
-- **An installer.** Building only produces a binary; see "Packaging a
-  standalone build" below for what that involves today.
+- **A notice when a newer version exists.** Until then, run `holodeck
+  update --check` yourself to find out.
 
 ## Development
 
@@ -138,53 +161,14 @@ its own build from the pushed tag.
 
 `holodeck --version` reads from `package.json` normally (dev, `npm run build`); a SEA build gets its version baked in at bundle time instead, since there's no `package.json` next to the binary to read at runtime.
 
-### Installing the binary — running `holodeck` from anywhere
+### Using a local build instead of a release
 
-There's no installer yet — building only produces the file at
-`dist-sea/holodeck[.exe]`, it doesn't put it on your `PATH`. Until it
-does, `holodeck` isn't a recognized command; move (or copy) the binary
-into a folder your `PATH` already includes, once per machine:
-
-**Windows (PowerShell):**
-
-```powershell
-mkdir "$env:LOCALAPPDATA\Holodeck" -Force
-Copy-Item .\dist-sea\holodeck.exe "$env:LOCALAPPDATA\Holodeck\holodeck.exe"
-[Environment]::SetEnvironmentVariable("Path", "$env:Path;$env:LOCALAPPDATA\Holodeck", "User")
-```
-
-Open a new terminal afterwards (`PATH` changes don't reach already-open
-ones). Windows resolves `holodeck` to `holodeck.exe` on its own
-(`PATHEXT`), no need to type the extension.
-
-**macOS / Linux:**
-
-```bash
-mkdir -p ~/.local/bin
-cp ./dist-sea/holodeck ~/.local/bin/holodeck
-```
-
-`~/.local/bin` is on `PATH` by default on most recent distros; if
-`holodeck --version` isn't found afterwards, add it yourself:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"   # add to ~/.bashrc or ~/.zshrc to persist
-```
-
-**macOS only, first run after downloading (not building locally):** a
-binary downloaded through a browser (e.g. from a GitHub Release) gets
-quarantined by Gatekeeper, which blocks it as "from an unidentified
-developer" the first time. `build-sea.mjs` already ad-hoc-signs the
-binary, but that doesn't clear the quarantine flag itself — either
-right-click the file → Open → confirm once, or:
-
-```bash
-xattr -d com.apple.quarantine ~/.local/bin/holodeck
-```
-
-A real installer (one command that copies itself into place and sets up
-`PATH`) is a natural next step once this is used by more than the two of
-us, not built yet.
+`npm run build:sea`'s output (`dist-sea/holodeck[.exe]`) isn't on your
+`PATH` on its own — that's only true of a real release, installed with
+the command in "Quickstart" above. To try your own local build instead,
+move (or copy) it into the same folder the installer would have used
+(`%LOCALAPPDATA%\Holodeck\holodeck.exe` on Windows,
+`~/.local/bin/holodeck` on macOS/Linux), overwriting what's there.
 
 ## License
 
