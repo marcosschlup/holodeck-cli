@@ -3,6 +3,7 @@ import path from 'node:path'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import { createActivityReporter, TRACKED_TASK_TOOLS } from './agentActivity.js'
 import { startPersonaConnection } from './agentConnection.js'
 import {
   describeChannelConnected,
@@ -39,6 +40,44 @@ import { dataDir } from './paths.js'
 // out). Kept out of the model's reach because calling `report_disconnect`
 // would flip the Agent offline while it is still connected.
 const CHANNEL_HANDLED_TOOLS = new Set(['report_health', 'report_disconnect'])
+
+// "Agent live activity" Intention, Task 3/7 (HOL-163): the tool `agent
+// start`'s own `--settings` hooks call into (agentCommands.ts builds that
+// config; this is the name both sides must agree on). Never returned by
+// ListToolsRequestSchema below — it isn't one of Holodeck's own tools, so it
+// was never going to appear there regardless, but it's still worth a tool
+// name the model would recognize as internal if it ever saw it some other
+// way. A CallToolRequestSchema call for it is handled directly, before the
+// `replaced`/CHANNEL_HANDLED_TOOLS checks: it's about this session's own
+// activity, not about acting as the Agent, so it keeps working even once
+// this session has been replaced.
+export const ACTIVITY_HOOK_TOOL = 'agent_activity_hook'
+
+// Found by a real end-to-end run, not in the docs (the spike's own "must it
+// be listed?" question, left open): Claude Code checks an `mcp_tool` hook's
+// `tool` name against this server's own `tools/list` BEFORE ever issuing
+// `tools/call` — an unlisted name fails client-side (`Tool ... not found`)
+// without this process seeing the call at all. So this DOES have to appear
+// below, unlike CHANNEL_HANDLED_TOOLS' own entries (those are real Holodeck
+// tools already listed by Holodeck itself). The description is the only
+// defense against the MODEL calling it directly (the CallToolRequestSchema
+// branch above would just no-op on args it doesn't recognize either way,
+// but it's better if the model never reaches for it in the first place).
+const ACTIVITY_HOOK_TOOL_DESCRIPTOR = {
+  name: ACTIVITY_HOOK_TOOL,
+  description: "Internal: used by this session's own hooks to report activity. Not for the model to call.",
+  inputSchema: {
+    type: 'object' as const,
+    properties: {
+      kind: { type: 'string' },
+      sessionId: { type: 'string' },
+      promptId: { type: 'string' },
+      toolName: { type: 'string' },
+      toolUseId: { type: 'string' },
+      durationMs: { type: 'string' },
+    },
+  },
+}
 
 const REPLACED_TOOL_MESSAGE =
   'This session was replaced: another session is now running this Agent, so its Holodeck tools are disabled here.'
@@ -102,6 +141,7 @@ export async function runChannel(agentId: string, version: string): Promise<void
   // instructions. A failure here exits non-zero, which Claude Code shows as
   // this server being `failed` in `/mcp`.
   const { identity, instructions: holodeckInstructions } = await fetchAgentSession(serverUrl, await getToken())
+  const activity = createActivityReporter(serverUrl, getToken, log)
 
   const mcp = new Server(
     { name: 'holodeck-channel', version },
@@ -130,9 +170,15 @@ export async function runChannel(agentId: string, version: string): Promise<void
       return { tools: [] }
     }
     const listed = await withMcpClient(serverUrl, await getToken(), (client) => client.listTools(request.params))
-    return { ...listed, tools: listed.tools.filter((tool) => !CHANNEL_HANDLED_TOOLS.has(tool.name)) }
+    return {
+      ...listed,
+      tools: [...listed.tools.filter((tool) => !CHANNEL_HANDLED_TOOLS.has(tool.name)), ACTIVITY_HOOK_TOOL_DESCRIPTOR],
+    }
   })
   mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
+    if (request.params.name === ACTIVITY_HOOK_TOOL) {
+      return activity.handleHookCall((request.params.arguments ?? {}) as Record<string, unknown>)
+    }
     if (replaced) {
       return { isError: true, content: [{ type: 'text', text: REPLACED_TOOL_MESSAGE }] }
     }
@@ -143,7 +189,11 @@ export async function runChannel(agentId: string, version: string): Promise<void
       }
     }
     try {
-      return await withMcpClient(serverUrl, await getToken(), (client) => client.callTool(request.params))
+      const result = await withMcpClient(serverUrl, await getToken(), (client) => client.callTool(request.params))
+      if (TRACKED_TASK_TOOLS.has(request.params.name)) {
+        activity.observeTaskToolCall(request.params.name, request.params.arguments, result)
+      }
+      return result
     } catch (error) {
       // A tool result the model can read and react to, rather than a
       // protocol error it can't see the cause of.
@@ -223,6 +273,7 @@ export async function runChannel(agentId: string, version: string): Promise<void
       return
     }
     shuttingDown = true
+    activity.stop()
     await connection.stop()
     process.exit(0)
   }

@@ -1,4 +1,5 @@
 import { confirm, select } from '@inquirer/prompts'
+import { ACTIVITY_HOOK_TOOL } from './channelServer.js'
 import { launchClaude, resolveClaudeExecutable } from './claudeLauncher.js'
 import {
   getAgentAccessToken,
@@ -147,6 +148,60 @@ async function setUpChannelAgent(agent: AgentSummary, verbose: boolean): Promise
   return { relativePath, serverName, agentId: agent.id }
 }
 
+// "Agent live activity" Intention, Task 3/7 (HOL-163): makes the session
+// observable by pointing Claude Code's own hooks back at the Channel's own
+// MCP server (channelServer.ts's ACTIVITY_HOOK_TOOL). `mcp_tool`, not
+// `command`/`http` (the spike's own measured recommendation — no process
+// spawn per tool call). `--settings` ADDS to the user's/project's own hooks
+// rather than replacing them (verified in the spike) — this is deliberately
+// never combined with `disableAllHooks`, which the spike also verified
+// silently kills every hook, including this one.
+//
+// Each event gets its own `input` template, listing only the fields that
+// event actually has (`duration_ms` only exists on PostToolUse, for
+// instance) — and, just as importantly, never `${tool_input}` or
+// `${tool_response}`. That omission IS the reduction agentActivity.ts's own
+// header comment describes: Claude Code only ever substitutes what a
+// template names, so the full tool input/output this design explicitly
+// excludes is never sent to this tool call in the first place, regardless
+// of what agentActivity.ts's handler does with what it does receive.
+function buildActivityHookSettings(serverName: string): object {
+  const hook = (input: Record<string, string>) => ({
+    hooks: [{ type: 'mcp_tool', server: serverName, tool: ACTIVITY_HOOK_TOOL, input }],
+  })
+  return {
+    hooks: {
+      UserPromptSubmit: [hook({ kind: 'run_started', sessionId: '${session_id}', promptId: '${prompt_id}' })],
+      PreToolUse: [
+        hook({ kind: 'tool_started', sessionId: '${session_id}', promptId: '${prompt_id}', toolName: '${tool_name}', toolUseId: '${tool_use_id}' }),
+      ],
+      PostToolUse: [
+        hook({
+          kind: 'tool_finished',
+          sessionId: '${session_id}',
+          promptId: '${prompt_id}',
+          toolName: '${tool_name}',
+          toolUseId: '${tool_use_id}',
+          durationMs: '${duration_ms}',
+        }),
+      ],
+      Stop: [hook({ kind: 'run_ended', sessionId: '${session_id}', promptId: '${prompt_id}' })],
+      SessionEnd: [hook({ kind: 'session_ended', sessionId: '${session_id}' })],
+    },
+    // A real end-to-end run found the tool has to be LISTED for Claude Code
+    // to dispatch an `mcp_tool` hook to it at all (channelServer.ts's own
+    // note on ACTIVITY_HOOK_TOOL_DESCRIPTOR) — which means the model can see
+    // it too. This deny rule is the attempt at closing that back open: scope
+    // item 4's own requirement was "never callable by the model", not just
+    // "hidden from a list", so a description alone (soft, ignorable) isn't
+    // enough. NOT YET CONFIRMED whether a deny rule also blocks the hook's
+    // OWN dispatch of the same tool (undocumented either way) — this needs
+    // a real test to confirm the hook still fires WITH this rule in place,
+    // not just that the model can't call it directly.
+    permissions: { deny: [`mcp__${serverName}__${ACTIVITY_HOOK_TOOL}`] },
+  }
+}
+
 // The Agent's model and effort from Holodeck go first as `--model` and
 // `--effort`; one the person passes themselves after `--` wins over it.
 function claudeArguments(config: ChannelConfig, extra: string[], runner: RunnerSettings): string[] {
@@ -158,6 +213,7 @@ function claudeArguments(config: ChannelConfig, extra: string[], runner: RunnerS
     config.relativePath,
     '--dangerously-load-development-channels',
     `server:${config.serverName}`,
+    ...(passed('--settings') ? [] : ['--settings', JSON.stringify(buildActivityHookSettings(config.serverName))]),
     ...extra,
   ]
 }
