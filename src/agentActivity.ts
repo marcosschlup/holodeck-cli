@@ -1,4 +1,4 @@
-import { CONNECTOR_USER_AGENT } from './holodeck.js'
+import { createActivityDeliveryQueue } from './activityDelivery.js'
 
 // "Agent live activity" Intention (docs/agent-live-activity.md in
 // task-manager), Task 3/7 (HOL-163). Everything a `channel run` process
@@ -19,16 +19,20 @@ import { CONNECTOR_USER_AGENT } from './holodeck.js'
 
 // Mirrors backend/src/domains/agentActivity/schema.ts's `AgentActivityEvent`
 // exactly — this Task's wire contract with that endpoint. A change to
-// either side needs a matching change to the other.
+// either side needs a matching change to the other. `mode` allows
+// `'headless'` too (not just this file's own `'channel'`) because
+// headlessActivity.ts (HOL-164) reuses this same type for its own events,
+// rather than each transport keeping a parallel copy of an identical shape.
+export type AgentActivityMode = 'channel' | 'headless'
 export type AgentActivityEvent =
-  | { type: 'run_started'; runId: string; taskId?: string; mode: 'channel'; at: string }
-  | { type: 'run_ended'; runId: string; taskId?: string; mode: 'channel'; at: string }
-  | { type: 'tool_started'; runId: string; taskId?: string; mode: 'channel'; at: string; toolName: string; toolUseId: string }
+  | { type: 'run_started'; runId: string; taskId?: string; mode: AgentActivityMode; at: string }
+  | { type: 'run_ended'; runId: string; taskId?: string; mode: AgentActivityMode; at: string }
+  | { type: 'tool_started'; runId: string; taskId?: string; mode: AgentActivityMode; at: string; toolName: string; toolUseId: string }
   | {
       type: 'tool_finished'
       runId: string
       taskId?: string
-      mode: 'channel'
+      mode: AgentActivityMode
       at: string
       toolName: string
       toolUseId: string
@@ -60,12 +64,6 @@ export const TRACKED_TASK_TOOLS = new Set(['start_working_on_task', 'get_task', 
 // which current-Task tracking clears rather than keeps pointing at it
 // (backend/src/domains/task/service.ts's own FIXED_TASK_STATUSES).
 const TERMINAL_TASK_STATUSES = new Set(['done', 'cancelled'])
-
-// The oldest pending event is dropped once the queue reaches this size,
-// rather than growing without bound for as long as the backend stays
-// unreachable — an extended outage should lose old activity, not memory.
-const MAX_QUEUE_SIZE = 200
-const SEND_INTERVAL_MS = 1000
 
 export interface ActivityReporter {
   // The hidden hook-receiving tool's own handler (channelServer.ts's
@@ -114,70 +112,13 @@ export function createActivityReporter(
   // it rather than leaving it open forever.
   let openRunId: string | undefined
 
-  const queue: AgentActivityEvent[] = []
-  function enqueue(event: AgentActivityEvent): void {
-    queue.push(event)
-    if (queue.length > MAX_QUEUE_SIZE) {
-      queue.shift()
-      log('agent activity queue is full; dropped the oldest pending event')
-    }
-  }
-
-  async function sendOne(event: AgentActivityEvent): Promise<{ ok: boolean; detail: string }> {
-    try {
-      const response = await fetch(new URL('/agent/activity', serverUrl), {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${await getToken()}`,
-          'content-type': 'application/json',
-          'user-agent': CONNECTOR_USER_AGENT,
-        },
-        body: JSON.stringify(event),
-      })
-      return { ok: response.ok, detail: `HTTP ${response.status}` }
-    } catch (error) {
-      return { ok: false, detail: String(error) } // Unreachable backend — the caller retries on the next tick.
-    }
-  }
-
-  // Sends oldest-first, one at a time, so a run's own events never arrive
-  // out of order at the backend. Stops at the first failure rather than
-  // skipping past it: the same event is retried next tick instead of being
-  // silently lost the moment the backend comes back.
-  //
-  // Logs only on the FIRST failure of a run of them, not every tick — a
-  // backend down for minutes would otherwise flood the per-Agent log file
-  // once a second for no new information. `--verbose` isn't checked here:
-  // this always goes to the same log() every other lifecycle event already
-  // uses, so "did the hook even fire?" can be answered from that one file.
-  let wasFailing = false
-  let draining = false
-  async function drain(): Promise<void> {
-    if (draining) {
-      return
-    }
-    draining = true
-    try {
-      while (queue.length > 0) {
-        const { ok, detail } = await sendOne(queue[0] as AgentActivityEvent)
-        if (!ok) {
-          if (!wasFailing) {
-            log(`agent activity: couldn't reach ${serverUrl}/agent/activity (${detail}); will keep retrying`)
-            wasFailing = true
-          }
-          break
-        }
-        if (wasFailing) {
-          log('agent activity: delivery to the backend recovered')
-          wasFailing = false
-        }
-        queue.shift()
-      }
-    } finally {
-      draining = false
-    }
-  }
-  const timer = setInterval(() => void drain(), SEND_INTERVAL_MS)
+  // Queue+drain+retry is shared with headlessActivity.ts (activityDelivery.ts's
+  // own note) — this file only ever calls `enqueue`, never touches the
+  // network directly. `--verbose` isn't checked here: this always goes to
+  // the same log() every other lifecycle event already uses, so "did the
+  // hook even fire?" can be answered from that one file regardless.
+  const delivery = createActivityDeliveryQueue<AgentActivityEvent>(serverUrl, getToken, log)
+  const enqueue = delivery.enqueue
 
   function clearCurrentTask(): void {
     currentTaskId = undefined
@@ -298,6 +239,6 @@ export function createActivityReporter(
   return {
     handleHookCall,
     observeTaskToolCall,
-    stop: () => clearInterval(timer),
+    stop: delivery.stop,
   }
 }
