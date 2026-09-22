@@ -29,7 +29,19 @@ if (!['patch', 'minor', 'major'].includes(bump)) {
 }
 
 function run(command, args, options = {}) {
-  return execFileSync(command, args, { cwd: repoRoot, encoding: 'utf8', ...options }).trim()
+  // On Windows, `npm` (unlike `git`) is a `.cmd` shim, not a real .exe.
+  // `execFileSync` can't spawn a `.cmd` at all without `shell: true` (Node
+  // rejects it outright since 20.12, `EINVAL`) — the same gotcha
+  // `claudeLauncher.ts` already works around for `claude.cmd`. With
+  // `shell: true`, Node only concatenates `command` and `args` into one
+  // shell command line rather than escaping each argument (its own
+  // DEP0190 warning) — safe here only because every argument this script
+  // ever passes is one of our own fixed literals (`version`, a bump type
+  // already checked against an allow-list above, `push`, `origin`, a tag
+  // built from `package.json`'s own version), never anything from outside
+  // this file.
+  const needsShell = process.platform === 'win32' && command === 'npm'
+  return execFileSync(command, args, { cwd: repoRoot, encoding: 'utf8', shell: needsShell, ...options }).trim()
 }
 
 function checkPreconditions() {
