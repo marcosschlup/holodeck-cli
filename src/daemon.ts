@@ -44,27 +44,18 @@ let serverUrl = ''
 // Last time this persona's session was sent the *generic* "go check
 // everything" nudge — RECONCILE_PROMPT, sent from both `startSession`
 // (session start) and `startConnection`'s `onConnected` (every connect or
-// reconnect). Both call sites share the one prompt on purpose now (HOL-68,
-// 2026-09-04) — they used to be two different, narrower prompts
-// (CHECK_IN_PROMPT only checked assigned Tasks; RECONCILE_PROMPT only
-// checked subscriptions/schedules/instructions), and this same dedup window
-// existed to stop the near-duplicate double-send when `startConnection` and
-// `startSession` run back-to-back for a brand-new session (register/
-// unpause/restart/daemon-reload) — but a restart only ever sent
-// CHECK_IN_PROMPT (from `startSession`, synchronous) because `onConnected`
-// fires moments later, after the network round trip, and by then this
-// window suppressed it as "recently nudged." Found live: Marcos restarted
-// Agent Connector to pick up HOL-67's `list_my_instructions` reconcile fix,
-// and the persona never checked instructions at all — CHECK_IN_PROMPT (the
-// one that actually ran) never mentioned instructions, subscriptions, or
-// schedules in the first place. One shared prompt for both moments removes
-// the whole "which of the two actually fires" question. Deliberately does
-// NOT gate `onSubscriptionMatched`
-// below: a live push names a specific subscription/Task, a distinct,
-// genuine occurrence each Agent Connector actually cares about — coalescing
-// it into this same window would silently drop real-time reactivity, the
-// one thing HOL-61 exists to add. Not a fully engineered de-dup (HOL-61's
-// own scope note) — just enough to stop the one obviously redundant case.
+// reconnect). Both call sites share the one prompt: a restart fires
+// `startSession`'s call synchronously, with `onConnected` following moments
+// later once the network round trip completes, so two narrower prompts each
+// covering only part of "check everything" could leave whichever one
+// actually ran silently incomplete. This window stops the near-duplicate
+// double-send when both fire back-to-back for a brand-new session
+// (register/unpause/restart/daemon-reload).
+// Deliberately does NOT gate `onSubscriptionMatched` below: a live push
+// names a specific subscription/Task, a distinct, genuine occurrence worth
+// acting on — coalescing it into this same window would silently drop
+// real-time reactivity, the one thing HOL-61 adds. Not a fully engineered
+// de-dup — just enough to stop the one obviously redundant case.
 const lastGenericNudgeAt = new Map<string, number>()
 const NUDGE_DEDUP_WINDOW_MS = 15_000
 
@@ -99,48 +90,39 @@ function genericNudge(name: string, text: string): void {
 // Mechanism 2 scheduled checks, and Mechanism 3 direct instructions. Used
 // identically at session start (startSession) and at every connect/
 // reconnect (startConnection's onConnected) — see lastGenericNudgeAt's own
-// comment above for why this used to be two separate, narrower prompts and
-// why that was a real bug (HOL-68, 2026-09-04): whichever of the two
-// actually fired on a given restart might not be the one that mentions the
-// thing that just changed.
+// comment above for why it's one shared prompt rather than two.
 //
 // Deliberately does NOT also say "list_tasks with assignedToMe" as its own
-// separate step (HOL-57's original MVP trigger, still here through HOL-68's
-// merge) — found live (2026-09-04, Marcos): that unconditional line has no
-// status awareness of its own, so it kept surfacing Tasks already `done`
-// for the persona to re-check even after HOL-69/HOL-70 taught the
-// "Assigned to me" subscription's own pattern/description to exclude
-// exactly that. Two lines meaning almost the same thing, one of them
-// ignorant of the filtering the other just learned, is the same class of
-// bug HOL-68 already fixed once (two prompts silently diverging) — not
-// something to reintroduce as two clauses in the same prompt.
+// separate step: that line would have no status awareness of its own, so it
+// would keep surfacing Tasks already `done` even though the "Assigned to
+// me" subscription's own pattern/description already excludes exactly that
+// — two lines meaning almost the same thing, one of them ignorant of the
+// filtering the other applies, is a class of bug worth not reintroducing as
+// two clauses in the same prompt.
 //
-// HOL-73 (2026-09-04): even with that line gone, reconciling the three
-// starter-pack Task-level subscriptions ("Assigned to me," "Interaction
-// added on my task," "Blocked response on my task") the same way as any
-// other subscription — "check current state via list_tasks/get_task" —
-// still meant enumerating every Task ever assigned to the persona and
-// fetching each one's full detail, scaling with a Project's total history,
-// not with what's actually new. `list_recent_activity_on_my_tasks` (new
-// MCP tool, backend) replaces that: one query, keyed off this Agent's own
-// read cursor, that only ever returns what changed since last checked.
-// It's called out explicitly for those three subscriptions, separate from
-// the general "list_my_subscriptions, check current state" clause that
-// still applies as-is to any other (arbitrary-pattern) subscription — a
-// single cursor query keyed on "my currently-assigned Tasks" doesn't
-// generalize to a subscription about arbitrary Project content, so custom
-// subscriptions still get the old per-subscription treatment.
+// Reconciling the three starter-pack Task-level subscriptions ("Assigned to
+// me," "Interaction added on my task," "Blocked response on my task") the
+// same way as any other subscription — "check current state via
+// list_tasks/get_task" — would mean enumerating every Task ever assigned to
+// the persona and fetching each one's full detail, scaling with a Project's
+// total history, not with what's actually new. `list_recent_activity_on_my_tasks`
+// (MCP tool, backend) replaces that: one query, keyed off this Agent's own
+// read cursor, that only ever returns what changed since last checked. It's
+// called out explicitly for those three subscriptions, separate from the
+// general "list_my_subscriptions, check current state" clause that still
+// applies as-is to any other (arbitrary-pattern) subscription — a single
+// cursor query keyed on "my currently-assigned Tasks" doesn't generalize to
+// a subscription about arbitrary Project content, so custom subscriptions
+// still get the per-subscription treatment.
 //
-// The closing sentence is a guard-rail, not a report to anyone (found live,
-// 2026-09-04, Marcos: this final text has no live reader — Agent Connector
-// only writes it to personaLog for a human to read later, if they ever do —
-// so phrasing it as "say so" implied an audience that doesn't exist). What
-// actually matters is "stop": without an explicit instruction not to, a
-// model asked to "check everything" on every single reconnect can drift
-// toward inventing a reason to act, just to look useful for that pass, even
-// when reconciling genuinely turned up nothing. That's the failure mode
-// this line exists to prevent — worth keeping, reworded around that instead
-// of around producing a summary for someone.
+// The closing sentence is a guard-rail, not a report to anyone: this final
+// text has no live reader — Agent Connector only writes it to personaLog
+// for a human to read later, if they ever do — so phrasing it as "say so"
+// would imply an audience that doesn't exist. What actually matters is
+// "stop": without an explicit instruction not to, a model asked to "check
+// everything" on every single reconnect can drift toward inventing a reason
+// to act, just to look useful for that pass, even when reconciling
+// genuinely turned up nothing. That's the failure mode this line prevents.
 const RECONCILE_PROMPT =
   "You just connected to Holodeck. Check everything that might need your attention: call list_recent_activity_on_my_tasks for anything new on your currently-assigned Tasks (covers your Assigned-to-me/Interaction/Blocked-response subscriptions in one call — prefer it over list_tasks/get_task for that); list_my_subscriptions and check current state for any other subscription not already covered by that (list_tasks/get_task/get_project_context as appropriate); list_my_schedules for your own standing scheduled checks (informational — the scheduler fires these on its own, only relevant here if something looks wrong); and list_my_instructions for any direct instruction sent while you were offline. React to anything that needs it — don't invent work where there isn't any. If nothing needs attention, just stop; no summary needed."
 
@@ -188,11 +170,10 @@ const AGENT_REMOVED_FROM_PROJECT_PROMPT =
 // Shared by the local `pause` IPC op and the remote `agent_stop_requested`
 // push (HOL-77, Web UI "Stop") — both mean the exact same thing, "stop this
 // persona now, mark it paused." Fire-and-forget on `connection.stop()`/
-// `session.close()` (not awaited), same as `pause` already did before this
-// was extracted: `connection.stop()` itself awaits this same connection's
-// own read loop, and `agent_stop_requested` fires *from inside* that read
-// loop's own frame handling — awaiting it here would deadlock the loop on
-// itself. The persisted/in-memory `paused` state is already correct by the
+// `session.close()` (not awaited): `connection.stop()` itself awaits this
+// same connection's own read loop, and `agent_stop_requested` fires *from
+// inside* that read loop's own frame handling — awaiting it here would
+// deadlock the loop on itself. The persisted/in-memory `paused` state is already correct by the
 // time this function returns either way, which is all `list`/`status`
 // need; the disconnect signal (`report_disconnect`, inside `stop()`)
 // reaching Holodeck a moment later is fine (same reasoning as

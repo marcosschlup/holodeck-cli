@@ -80,7 +80,7 @@ function userTurn(text: string): SDKUserMessage {
 //   native sandboxing (a follow-up task once this lands) is for, not a
 //   gap to paper over here.
 //
-// A `PreToolUse` hook, not `canUseTool` (HOL-62, found live 2026-09-03):
+// A `PreToolUse` hook, not `canUseTool` (HOL-62):
 // `canUseTool` is only consulted when the CLI's own internal risk
 // classifier, under `permissionMode: 'default'`, decides a call is
 // "dangerous" enough to ask about — confirmed against the real SDK bundle
@@ -179,38 +179,36 @@ export function startPersonaSession(record: PersonaRecord): PersonaSession {
       // Tier 2 (PLAN.md 9) — independent layer from the `hooks.PreToolUse`
       // tier-1 policy above, which still hard-denies `Bash` regardless of
       // sandbox state, so there's no security regression either way this
-      // resolves. HOL-63 confirmed live: on native Windows today, the
-      // SDK's sandbox is feature-gated off ("Sandbox required but
-      // unavailable... feature gate off") — with `failIfUnavailable`'s
-      // own default (`true`), that made every session on Windows fail to
-      // *start at all*, a real regression HOL-63 introduced and this
-      // fixes. `failIfUnavailable: false` degrades gracefully instead:
-      // sandboxed where the platform already supports it (macOS/Linux/
-      // WSL2, unaffected by the Windows gate), silently unsandboxed
-      // elsewhere for now — safe because tier 1 is the actual gate on
-      // Windows in the interim, not this option.
+      // resolves. On native Windows today, the SDK's sandbox is
+      // feature-gated off ("Sandbox required but unavailable... feature
+      // gate off") — with `failIfUnavailable`'s own default (`true`), that
+      // would make every session on Windows fail to *start at all*.
+      // `failIfUnavailable: false` degrades gracefully instead: sandboxed
+      // where the platform already supports it (macOS/Linux/WSL2,
+      // unaffected by the Windows gate), silently unsandboxed elsewhere for
+      // now — safe because tier 1 is the actual gate on Windows in the
+      // interim, not this option.
       //
-      // **Decided (Marcos, 2026-09-03): wait for Anthropic's own native
-      // Windows sandbox to ship, not build the Codex CLI wrapper now**
-      // (HOL-64's own investigation: real, but a genuine medium-sized,
-      // undocumented-wire-protocol integration, not a thin one). Left
-      // `enabled: true` deliberately — the moment Anthropic's feature
-      // gate opens, this starts sandboxing on Windows with zero further
-      // Agent Connector changes; nothing to remember to flip. Revisit
-      // building the Codex-based wrapper (PLAN.md 9, HOL-64) only if this
-      // wait turns out to take too long, or the decision changes.
+      // **Decision: wait for Anthropic's own native Windows sandbox to
+      // ship, rather than build a Codex CLI wrapper now** (HOL-64's own
+      // investigation: real, but a genuine medium-sized, undocumented-
+      // wire-protocol integration, not a thin one). Left `enabled: true`
+      // deliberately — the moment Anthropic's feature gate opens, this
+      // starts sandboxing on Windows with zero further changes here;
+      // nothing to remember to flip. Revisit building the Codex-based
+      // wrapper (PLAN.md 9, HOL-64) only if this wait turns out to take too
+      // long, or the decision changes.
       sandbox: { enabled: true, autoAllowBashIfSandboxed: true, failIfUnavailable: false },
       // Replaces the subprocess environment entirely (doesn't merge with
       // process.env — confirmed against the SDK's own .d.ts), so every
       // inherited variable this subprocess still needs (PATH, HOME, ...)
       // has to be spread in explicitly here, not just the credential.
       env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: claudeToken },
-      // Without this, the persona has no way to reach Holodeck at all —
-      // found live (2026-09-03): the session came up and authenticated
-      // fine, but ToolSearch turned up nothing for list_projects/
-      // list_tasks, because `mcpServers` was simply never set here. Same
-      // Bearer-token auth `resolveAgentIdentity` (holodeck.ts) already
-      // uses for the one-off get_my_context call at `register` time.
+      // Without this, the persona has no way to reach Holodeck at all: the
+      // session would authenticate fine, but ToolSearch would turn up
+      // nothing for list_projects/list_tasks. Same Bearer-token auth
+      // `resolveAgentIdentity` (holodeck.ts) already uses for the one-off
+      // get_my_context call at `register` time.
       // `alwaysLoad: true` because this is the core, always-relevant tool
       // set for a connector persona, not something worth deferring behind
       // tool search the way an incidental MCP server would be.

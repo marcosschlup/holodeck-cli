@@ -111,14 +111,14 @@ export function formatLogEntry(entry: Record<string, unknown>): string | null {
   }
 
   if (type === 'result') {
-    // Deliberately not showing `total_cost_usd` here — confirmed live
-    // (Marcos, 2026-09-03) it reads as a real dollar charge but isn't
-    // one for a subscription-authenticated session (`apiKeySource:
-    // "none"`): the SDK's own docs call it "an estimate, not a billing
-    // statement," what actually happens is real usage is metered against
-    // the subscription's rolling quota (`rate_limit_event`'s
-    // `unifiedWindows`), not billed per token. Showing a number that
-    // looks like money but isn't is worse than not showing one.
+    // Deliberately not showing `total_cost_usd` here: for a subscription-
+    // authenticated session (`apiKeySource: "none"`) it reads as a real
+    // dollar charge but isn't one — the SDK's own docs call it "an
+    // estimate, not a billing statement," what actually happens is real
+    // usage is metered against the subscription's rolling quota
+    // (`rate_limit_event`'s `unifiedWindows`), not billed per token.
+    // Showing a number that looks like money but isn't is worse than not
+    // showing one.
     const seconds = typeof entry.duration_ms === 'number' ? (entry.duration_ms / 1000).toFixed(1) : '?'
     // Trailing blank line — marks the end of this turn, so the next
     // `● connected` (a restart, or the next persona event) doesn't run

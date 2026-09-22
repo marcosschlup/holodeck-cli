@@ -121,17 +121,20 @@ npm run build                # compile to dist/, then `npm start -- <command>` o
 [Single Executable Application](https://nodejs.org/api/single-executable-applications.html)
 via `scripts/build-sea.mjs` — a single native binary at
 `dist-sea/holodeck[.exe]` that needs no Node install on the machine that
-runs it. Built and verified on Windows; the macOS/Linux code-signing
-steps follow Node's own docs but haven't been run on real hardware yet
-(no CI matrix for this yet, PLAN.md 9).
+runs it. Useful for a local build to test with; an actual release is
+built for every platform in CI, not locally (below).
 
-`npm run release -- [patch|minor|major]` (default `patch`) does a full
-release in one step: bumps the version (`npm version`, which also
-commits and tags), builds the SEA binary, pushes the commit + tag, and
-publishes it as a GitHub Release via `gh release create`. Requires a
-clean working tree, a configured `git remote`, and the `gh` CLI
-installed and authenticated (`gh auth login`) — fails fast with a clear
-message if any of those aren't met.
+`npm run release -- [patch|minor|major]` (default `patch`) bumps the
+version (`npm version`, which also commits and tags) and pushes the
+commit + tag. That push is the trigger:
+[`.github/workflows/release.yml`](.github/workflows/release.yml) builds
+the binary on every target platform (Windows, macOS x64/arm64, Linux
+x64/arm64 — no Windows arm64 yet), smoke-tests each one on its own
+native runner, and publishes them all as one GitHub Release with a
+combined `SHA256SUMS`. Releasing needs a clean working tree and a
+configured `git remote`; it doesn't need the `gh` CLI, or even a
+successful local build, on your own machine anymore — the workflow does
+its own build from the pushed tag.
 
 `holodeck --version` reads from `package.json` normally (dev, `npm run build`); a SEA build gets its version baked in at bundle time instead, since there's no `package.json` next to the binary to read at runtime.
 
@@ -182,3 +185,10 @@ xattr -d com.apple.quarantine ~/.local/bin/holodeck
 A real installer (one command that copies itself into place and sets up
 `PATH`) is a natural next step once this is used by more than the two of
 us, not built yet.
+
+## License
+
+[Holodeck CLI License 1.0](LICENSE) — you can read, run and audit this
+code, including for commercial use, as long as that use is to connect
+to the Holodeck service. Modifying it or redistributing it (as source
+or as a built binary) isn't permitted.

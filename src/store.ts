@@ -23,7 +23,7 @@ export interface PersonaRecord {
   // edge) — the token stays here, this just marks that the daemon
   // shouldn't auto-connect it on its own next start, only on an explicit
   // `holodeck start <persona>`. `holodeck forget <persona>` is the actual
-  // removal. Undefined/false = active, same as before this field existed.
+  // removal. Undefined/false = active.
   paused?: boolean
 }
 

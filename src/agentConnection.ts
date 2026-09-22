@@ -60,9 +60,7 @@ export interface ScheduledCheckDueEvent {
 
 // The three reserved events PLAN.md's "Mechanism 1... Reserved event types"
 // section designed (an Agent's own configuration changing, not Project
-// content) — found live (2026-09-04) they had the exact same silent-drop
-// gap as the two above: the backend has pushed these since before Mechanism
-// 2/3 existed, but nothing here ever recognized them.
+// content).
 export interface AgentInstructionsUpdatedEvent {
   type: 'agent_instructions_updated'
 }
@@ -122,10 +120,7 @@ export interface PersonaConnectionHandlers {
   // Fired for every `subscription_matched` frame received while the
   // connection is live (HOL-61's "case 1" — a genuine real-time push).
   onSubscriptionMatched?: (event: SubscriptionMatchedEvent) => void
-  // Fired for every `agent_instruction_sent` frame (Mechanism 3, HOL-65) —
-  // found live (2026-09-04, Marcos) that this and scheduled_check_due below
-  // were pushed by the server but never wired to anything here, so a sent
-  // instruction/a due schedule silently did nothing.
+  // Fired for every `agent_instruction_sent` frame (Mechanism 3, HOL-65).
   onAgentInstructionSent?: (event: AgentInstructionSentEvent) => void
   // Fired for every `scheduled_check_due` frame (Mechanism 2, HOL-60).
   onScheduledCheckDue?: (event: ScheduledCheckDueEvent) => void

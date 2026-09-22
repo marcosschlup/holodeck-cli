@@ -12,8 +12,7 @@ import { DEFAULT_SERVER_URL } from './holodeck.js'
 // subscription covers every persona registered here, for v1 — see
 // PLAN.md 9's Agent SDK auth decision). Same sensitivity class as a
 // bearer token, so this file gets the same 0600 restriction store.ts's
-// personas.json already has, unlike before this field existed (serverUrl
-// alone wasn't sensitive enough to bother).
+// personas.json already has.
 interface ConfigFile {
   serverUrl?: string
   claudeToken?: string

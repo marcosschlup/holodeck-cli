@@ -147,8 +147,8 @@ async function requestTokens(serverUrl: string, params: Record<string, string>):
 function toLoginTokens(tokens: OAuthTokenResponse, currentRefreshToken?: string): LoginTokens {
   // SAFETY: the initial grant is requested with the `offline_access` scope
   // above, which Holodeck's OAuth server always pairs with a refresh token
-  // (confirmed live, HOL-126) - absent only if that scope was somehow
-  // dropped, which would itself be a server-side bug worth failing loudly
+  // (HOL-126) - absent only if that scope was somehow dropped, which would
+  // itself be a server-side bug worth failing loudly
   // on rather than silently storing a credential with no way to ever renew
   // itself. A refresh response may not rotate it, in which case the
   // current one stays valid.
@@ -183,12 +183,11 @@ export async function loginWithBrowser(serverUrl: string): Promise<LoginTokens> 
   authorizeUrl.searchParams.set('scope', OAUTH_SCOPE)
   // Without an explicit `resource` (RFC 8707), Holodeck's OAuth provider
   // issues an opaque access token with no `aud`/custom claims at all - it
-  // only signs a real JWT when a request asks for one specific resource
-  // (found live, 2026-09-18: a real MCP client like Claude Code's own
-  // discovers this via the protected-resource metadata and always sends
-  // it; this CLI skipped that discovery step and hardcodes the same
-  // resource identifier Holodeck's own backend always advertises for
-  // `serverUrl` instead).
+  // only signs a real JWT when a request asks for one specific resource. A
+  // real MCP client like Claude Code discovers this via the
+  // protected-resource metadata and always sends it; this CLI skips that
+  // discovery step and hardcodes the same resource identifier Holodeck's
+  // own backend always advertises for `serverUrl` instead.
   authorizeUrl.searchParams.set('resource', new URL('/mcp', serverUrl).toString())
 
   const codePromise = waitForAuthorizationCode(state)

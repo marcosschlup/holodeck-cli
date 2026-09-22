@@ -1,0 +1,110 @@
+name: Release
+
+# Fires when release.mjs pushes a version tag (HOL-153, Holodeck CLI
+# distribution Intention, task-manager repo) — builds the CLI on every
+# target platform, smoke-tests each binary on its own native runner (the
+# only way to prove a SEA binary for that OS actually starts), then
+# publishes them all as one GitHub Release with a combined checksum file.
+# `release.mjs` only bumps the version and pushes the tag now; building and
+# publishing is entirely this workflow's job, so a release no longer needs
+# the `gh` CLI on anyone's machine.
+#
+# No Windows arm64 target yet — add a matrix entry here if real demand
+# shows up.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # to attach assets to the Release this workflow creates
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          # Runner labels current as of this writing — GitHub renames/
+          # retires them occasionally (macos-latest itself moved from x64
+          # to arm64 in 2025); check
+          # https://github.com/actions/runner-images if a job here starts
+          # failing with "no runner matching" instead of a real build error.
+          - os: windows-latest
+            platform: windows
+            arch: x64
+            ext: .exe
+          - os: macos-15-intel
+            platform: macos
+            arch: x64
+            ext: ''
+          - os: macos-14
+            platform: macos
+            arch: arm64
+            ext: ''
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+            ext: ''
+          # Free on public repos since 2025; not available on every plan
+          # for a private one.
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            ext: ''
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci
+      - run: npm run build:sea
+      - name: Name the asset for this platform/arch
+        shell: bash
+        run: |
+          mkdir -p out
+          asset="holodeck-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.ext }}"
+          cp "dist-sea/holodeck${{ matrix.ext }}" "out/$asset"
+          echo "ASSET_PATH=out/$asset" >> "$GITHUB_ENV"
+          echo "ASSET_NAME=$asset" >> "$GITHUB_ENV"
+      - name: Smoke test — confirm the binary actually starts on this OS
+        shell: bash
+        run: '"$ASSET_PATH" --version'
+      - name: Checksum
+        shell: bash
+        # `node` (not `sha256sum`/`shasum`) so this is identical across all
+        # five runners — macOS has no `sha256sum` by default, and Windows'
+        # Git Bash has it but that's one more inconsistency to not rely on.
+        run: |
+          node -e "
+            const { createHash } = require('node:crypto');
+            const { readFileSync } = require('node:fs');
+            const { basename } = require('node:path');
+            const path = process.argv[1];
+            const hash = createHash('sha256').update(readFileSync(path)).digest('hex');
+            console.log(hash + '  ' + basename(path));
+          " "$ASSET_PATH" > "$ASSET_PATH.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET_NAME }}
+          path: |
+            ${{ env.ASSET_PATH }}
+            ${{ env.ASSET_PATH }}.sha256
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Combine the per-asset checksums into one file
+        run: cat assets/*.sha256 > assets/SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            assets/holodeck-*
+            assets/SHA256SUMS
+          generate_release_notes: true

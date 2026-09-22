@@ -42,9 +42,9 @@ export function pidFilePath(): string {
 // daemon's own next start (store.ts's `PersonaRecord.paused`). Deliberately
 // not folded into the daemon-level `start`/`stop` ops below — a command
 // meaning two different things depending on whether a persona argument
-// happens to be there reads as ambiguous (Marcos, 2026-09-03), so
-// per-persona and daemon-level lifecycle stay entirely separate at the
-// CLI layer too (the `agent` command group, cli.ts).
+// happens to be there reads as ambiguous, so per-persona and daemon-level
+// lifecycle stay entirely separate at the CLI layer too (the `agent`
+// command group, cli.ts).
 // `restart` (HOL-57) restarts a persona's live Claude Agent SDK session
 // only — its /agent/events connection and store record are untouched, so
 // this is a lighter operation than pause+unpause, not a shortcut for it.

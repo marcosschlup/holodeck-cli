@@ -44,10 +44,9 @@ void (async () => {
   }
 })()
 
-// `package.json`'s own version, single source of truth — `holodeck
-// --version` used to carry its own hardcoded literal here, which could
-// (and did) drift out of sync with the package's real version. `../
-// package.json` resolves consistently whether this runs as `src/cli.ts`
+// `package.json`'s own version, single source of truth for `holodeck
+// --version` rather than a hardcoded literal that could drift out of sync.
+// `../package.json` resolves consistently whether this runs as `src/cli.ts`
 // under tsx (dev) or as the built `dist/cli.js` (`npm run build`) — both
 // sit one directory below the package root. A SEA binary has no such
 // file next to it (the whole point is a single self-contained
@@ -128,12 +127,10 @@ async function ensureDaemonRunning(): Promise<StatusOk | null> {
   // parent/child messaging channel `fork()` sets up automatically —
   // gives the child a way to report "I'm actually listening now" the
   // instant it's true (runDaemon's own `process.send?.('ready')`),
-  // rather than the parent guessing how long "probably started by now"
-  // is. An earlier version of this function polled on a fixed schedule
-  // instead; that was fragile (a failed connection attempt resolves
-  // near-instantly, so naive retries burned through their whole budget
-  // in a fraction of a second) and was still just a guess at timing even
-  // once fixed — this is a real signal.
+  // rather than polling on a fixed schedule: a failed connection attempt
+  // resolves near-instantly, so naive retries would burn through their
+  // whole budget in a fraction of a second, and any fixed delay is still
+  // just a guess at timing.
   const respawnArgs = isSea()
     ? ['--__daemon']
     : [...process.execArgv, process.argv[1] as string, '--__daemon']
@@ -471,10 +468,10 @@ async function main(): Promise<void> {
 
   // A separate group from the bare `start`/`stop` above — those are about
   // the daemon process itself; these are about one persona within it.
-  // Folding "reconnect a persona" into `start <persona>` read as
-  // ambiguous with "start the daemon" (Marcos, 2026-09-03) — this group
-  // exists specifically so no command name has to mean two different
-  // things depending on whether an argument happens to be there.
+  // Folding "reconnect a persona" into `start <persona>` would read as
+  // ambiguous with "start the daemon" — this group exists specifically so
+  // no command name has to mean two different things depending on whether
+  // an argument happens to be there.
   const agent = program.command('agent').description('Set up and start your Agents on this machine')
 
   agent
