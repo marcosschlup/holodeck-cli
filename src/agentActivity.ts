@@ -184,7 +184,16 @@ export function createActivityReporter(
       const id = typeof parsed?.id === 'string' ? parsed.id : undefined
       const displayId = typeof parsed?.taskId === 'string' ? parsed.taskId : undefined
       const status = typeof parsed?.status === 'string' ? parsed.status : undefined
-      if (id && status && TERMINAL_TASK_STATUSES.has(status)) {
+      // The terminal-status clear only makes sense for
+      // `start_working_on_task` — there's no real "started working" to
+      // track if the Task turns out to already be done/cancelled. `get_task`
+      // is a plain read and, per this Task's own widening above, an Agent
+      // reviewing/refining/reading a Task is normal regardless of its
+      // status — clearing here would silently undo that: reading an
+      // already-terminal Task and then genuinely acting on it (add_interaction,
+      // update_task, ...) moments later, exactly this bug's own repro, is a
+      // real, intended case, not evidence the Agent moved on.
+      if (toolName === 'start_working_on_task' && id && status && TERMINAL_TASK_STATUSES.has(status)) {
         clearCurrentTask()
       } else if (id) {
         currentTaskId = id
