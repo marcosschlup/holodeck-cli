@@ -57,13 +57,53 @@ function runIdFrom(args: Record<string, unknown>): string | undefined {
 // The Holodeck tools whose calls this Task watches to maintain a "current
 // Task" for the channel process (spike item 5) — exported so
 // channelServer.ts's existing tool-forwarding branch knows which calls to
-// look at, without duplicating this list.
-export const TRACKED_TASK_TOOLS = new Set(['start_working_on_task', 'get_task', 'pause_work', 'finish_status_work', 'change_task_status'])
+// look at, without duplicating this list. Every Task-scoped tool Holodeck
+// has, not just the `in_progress`-lifecycle ones (start_working_on_task/
+// pause_work/finish_status_work/change_task_status) — widened after a real
+// gap: an Agent whose job is reviewing a Task in `review`, or refining one
+// in `backlog`, may never call those (their names, and their side effects
+// on status/assignee, don't fit that work), but it WILL call `get_task`,
+// `add_interaction`, `update_task`, `raise_blocked`, etc. as a completely
+// normal part of doing that work regardless of the Task's own status.
+// `resolve_blocked` (takes a `blockId`, not a `taskId`) and `list_tasks`/
+// `create_task` (never about one specific already-existing Task the way
+// "current" means here) are left out on purpose.
+export const TRACKED_TASK_TOOLS = new Set([
+  'start_working_on_task',
+  'get_task',
+  'get_task_activity',
+  'update_task',
+  'set_resolution',
+  'change_task_assignee',
+  'raise_blocked',
+  'add_interaction',
+  'set_active_work',
+  'pause_work',
+  'finish_status_work',
+  'change_task_status',
+])
 
 // A Task at either of these can't be worked on any more — the point at
 // which current-Task tracking clears rather than keeps pointing at it
 // (backend/src/domains/task/service.ts's own FIXED_TASK_STATUSES).
 const TERMINAL_TASK_STATUSES = new Set(['done', 'cancelled'])
+
+// Every internal Task id this codebase hands out is a Prisma-generated
+// cuid: lowercase letters and digits only, no hyphen (seen throughout this
+// session's own ids, e.g. `cmucypx8x001th0yahzuskp72`). A display id
+// (`"HOL-165"`) never matches this — always uppercase letters, a hyphen,
+// then digits. Distinguishing the two matters because the backend's own
+// `taskId` is a real Postgres foreign key (schema.prisma's `AgentRun.task`
+// relation): sending it a display id instead of the row's actual id would
+// fail the constraint, not degrade gracefully. This lets most Task-scoped
+// tool calls adopt a NEW current Task directly from their own `taskId`
+// argument, with no extra lookup, whenever an Agent already has the
+// canonical id in hand (the overwhelmingly common case — it's what
+// `get_task`'s own result just handed back) — without ever trusting an
+// unresolved display id enough to send it onward.
+function looksLikeInternalTaskId(identifier: string): boolean {
+  return /^[a-z][a-z0-9]{19,}$/.test(identifier)
+}
 
 export interface ActivityReporter {
   // The hidden hook-receiving tool's own handler (channelServer.ts's
@@ -135,13 +175,10 @@ export function createActivityReporter(
     const a = (args ?? {}) as Record<string, unknown>
     const identifier = typeof a.taskId === 'string' ? a.taskId : undefined
 
-    // These two are the only tracked tools whose result carries the Task's
-    // canonical internal id (`get_task`'s full row; `start_working_on_task`'s
-    // own confirmation) — the only safe moments to adopt a NEW current Task,
-    // last one wins. `pause_work`/`finish_status_work`/`change_task_status`
-    // never echo the id back, so they only ever act on a Task already
-    // tracked this way (below); a call naming some other Task is left alone
-    // rather than guessed at.
+    // `get_task`/`start_working_on_task` are the only two whose RESULT
+    // carries the Task's canonical id (get_task's full row;
+    // start_working_on_task's own confirmation) — trusted unconditionally,
+    // last one wins, same as before this Task's tools were widened.
     if (toolName === 'start_working_on_task' || toolName === 'get_task') {
       const parsed = firstResultText(result)
       const id = typeof parsed?.id === 'string' ? parsed.id : undefined
@@ -156,6 +193,21 @@ export function createActivityReporter(
       return
     }
 
+    // Every other tracked tool only ever gets an identifier in its own
+    // ARGUMENTS, never a canonical id back in its result. Adopt it directly
+    // when it's already in canonical form (looksLikeInternalTaskId) — an
+    // Agent reviewing/refining a Task almost always already has that exact
+    // id in hand by the time it calls add_interaction/update_task/etc.,
+    // since that's what get_task handed it moments earlier. A display id
+    // ("HOL-165") is never adopted from here (the FK risk
+    // looksLikeInternalTaskId's own comment explains) — it only gets used
+    // below, to recognize a call that's still about the Task already
+    // tracked (e.g. change_task_status clearing it).
+    if (identifier && looksLikeInternalTaskId(identifier) && identifier !== currentTaskId) {
+      currentTaskId = identifier
+      currentDisplayId = undefined // Unknown until get_task/start_working_on_task confirms it.
+    }
+
     if (toolName === 'change_task_status' && identifier && namesCurrentTask(identifier)) {
       // The new status is right there in the call's own arguments — no
       // result to parse, and no round trip needed to learn it.
@@ -164,9 +216,11 @@ export function createActivityReporter(
         clearCurrentTask()
       }
     }
-    // pause_work / finish_status_work never change status or assignee
-    // (their own descriptions), so there is nothing here for current-Task
-    // tracking to react to beyond what the two branches above already cover.
+    // The rest (pause_work/finish_status_work/set_active_work/
+    // get_task_activity/raise_blocked/add_interaction/update_task/
+    // set_resolution/change_task_assignee) never change status themselves,
+    // so there is nothing else here for current-Task tracking to react to
+    // beyond the adoption above.
   }
 
   function handleHookCall(args: Record<string, unknown>): { content: { type: 'text'; text: string }[] } {
