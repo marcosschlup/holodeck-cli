@@ -164,6 +164,24 @@ describe('channel activity reporter', () => {
     )
   })
 
+  it('starts every turn on no Task, but keeps the Task for a message joining the running turn', () => {
+    const { sent, hook, holodeckTool, nativeTool } = setUp()
+    hook('turn_started')
+    holodeckTool('toolu_read', 'get_task', 'TES-1')
+    hook('turn_started')
+    nativeTool('toolu_same_turn', 'Bash')
+    hook('turn_stopped')
+    hook('turn_started', { promptId: 'p2' })
+    nativeTool('toolu_next_turn', 'Bash')
+
+    const sameTurn = sent.find((event) => event.toolUseId === 'toolu_same_turn')
+    const nextTurn = sent.find((event) => event.toolUseId === 'toolu_next_turn')
+    assert.equal(sameTurn?.contextTaskDisplayId, 'TES-1')
+    assert.equal(nextTurn?.contextTaskDisplayId, undefined)
+    assert.equal(sent.at(-2)?.kind, 'run_started')
+    assert.equal(sent.at(-2)?.contextTaskDisplayId, undefined)
+  })
+
   it('treats a message typed during a turn as part of that turn, not a new one', () => {
     const { sent, hook, nativeTool, succeeded } = setUp()
     hook('turn_started')

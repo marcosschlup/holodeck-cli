@@ -211,6 +211,11 @@ export function createChannelActivityReporter({
         session.mainRunOpen = true
         const [, main] = lineFor(sessionId, session, undefined, undefined, promptId)
         main.runId = session.mainRunId
+        // Each turn starts on no Task, same as its metrics (Marcos, HOL-176):
+        // a session is open-ended, and the next message may have nothing to
+        // do with the last Task touched. Subagents still start from the
+        // context of the turn that spawned them.
+        main.context = undefined
         emit(sessionId, session, MAIN_LINE, main.runId, 'run_started')
         return
       }
