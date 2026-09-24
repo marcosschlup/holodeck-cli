@@ -1,5 +1,14 @@
 import { createActivityDeliveryQueue } from './activityDelivery.js'
-import type { AgentActivityEvent } from './agentActivity.js'
+
+// V1 wire shape (`POST /agent/activity`). This module isn't wired to anything
+// yet (the Headless daemon, HOL-131, doesn't exist); HOL-179 rewrites it onto
+// V2's liveActivityEvents.ts.
+type AgentActivityMode = 'channel' | 'headless'
+type AgentActivityEvent =
+  | { type: 'run_started'; runId: string; taskId?: string; mode: AgentActivityMode; at: string }
+  | { type: 'run_ended'; runId: string; taskId?: string; mode: AgentActivityMode; at: string }
+  | { type: 'tool_started'; runId: string; taskId?: string; mode: AgentActivityMode; at: string; toolName: string; toolUseId: string }
+  | { type: 'tool_finished'; runId: string; taskId?: string; mode: AgentActivityMode; at: string; toolName: string; toolUseId: string; durationMs: number }
 
 // "Agent live activity" Intention (docs/agent-live-activity.md in
 // task-manager), Task 4/7 (HOL-164). The Headless counterpart to

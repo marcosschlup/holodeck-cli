@@ -165,28 +165,31 @@ async function setUpChannelAgent(agent: AgentSummary, verbose: boolean): Promise
 // template names, so the full tool input/output this design explicitly
 // excludes is never sent to this tool call in the first place, regardless
 // of what agentActivity.ts's handler does with what it does receive.
+//
+// V2 (docs/agent-live-activity-v2.md, sections 3.1 and 6.1): every hook also
+// templates `agent_id`/`agent_type` (present only inside a subagent) and the
+// Holodeck tools' own `taskId` argument. `holodeckServer` is a constant: the
+// channel process doesn't know its own config name, and comparing it with
+// `${mcp_server.name}` is what keeps other MCP servers' (or Claude Code's own
+// TaskUpdate's) `taskId` from being read as a Holodeck Task.
 function buildActivityHookSettings(serverName: string): object {
-  const hook = (input: Record<string, string>) => ({
-    hooks: [{ type: 'mcp_tool', server: serverName, tool: ACTIVITY_HOOK_TOOL, input }],
-  })
+  const common = { sessionId: '${session_id}', promptId: '${prompt_id}', agentId: '${agent_id}', agentType: '${agent_type}' }
+  const hook = (kind: string, fields: Record<string, string> = {}) => [
+    { hooks: [{ type: 'mcp_tool', server: serverName, tool: ACTIVITY_HOOK_TOOL, input: { kind, ...common, ...fields } }] },
+  ]
+  const tool = { toolName: '${tool_name}', toolUseId: '${tool_use_id}' }
   return {
     hooks: {
-      UserPromptSubmit: [hook({ kind: 'run_started', sessionId: '${session_id}', promptId: '${prompt_id}' })],
-      PreToolUse: [
-        hook({ kind: 'tool_started', sessionId: '${session_id}', promptId: '${prompt_id}', toolName: '${tool_name}', toolUseId: '${tool_use_id}' }),
-      ],
-      PostToolUse: [
-        hook({
-          kind: 'tool_finished',
-          sessionId: '${session_id}',
-          promptId: '${prompt_id}',
-          toolName: '${tool_name}',
-          toolUseId: '${tool_use_id}',
-          durationMs: '${duration_ms}',
-        }),
-      ],
-      Stop: [hook({ kind: 'run_ended', sessionId: '${session_id}', promptId: '${prompt_id}' })],
-      SessionEnd: [hook({ kind: 'session_ended', sessionId: '${session_id}' })],
+      UserPromptSubmit: hook('turn_started'),
+      PreToolUse: hook('tool_started', { ...tool, taskId: '${tool_input.taskId}', mcpServer: '${mcp_server.name}', holodeckServer: serverName }),
+      PermissionRequest: hook('tool_awaiting_permission', { toolName: '${tool_name}' }),
+      PostToolUse: hook('tool_succeeded', { ...tool, durationMs: '${duration_ms}' }),
+      PostToolUseFailure: hook('tool_failed', { ...tool, durationMs: '${duration_ms}', isInterrupt: '${is_interrupt}' }),
+      SubagentStart: hook('subagent_started'),
+      SubagentStop: hook('subagent_stopped'),
+      Stop: hook('turn_stopped'),
+      StopFailure: hook('turn_failed'),
+      SessionEnd: hook('session_ended'),
     },
     // A real end-to-end run found the tool has to be LISTED for Claude Code
     // to dispatch an `mcp_tool` hook to it at all (channelServer.ts's own

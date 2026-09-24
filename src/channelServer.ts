@@ -3,7 +3,8 @@ import path from 'node:path'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
-import { createActivityReporter, TRACKED_TASK_TOOLS } from './agentActivity.js'
+import { createChannelActivityReporter } from './channelActivity.js'
+import { createLiveActivityDelivery } from './liveActivityDelivery.js'
 import { startPersonaConnection } from './agentConnection.js'
 import {
   describeChannelConnected,
@@ -72,9 +73,15 @@ const ACTIVITY_HOOK_TOOL_DESCRIPTOR = {
       kind: { type: 'string' },
       sessionId: { type: 'string' },
       promptId: { type: 'string' },
+      agentId: { type: 'string' },
+      agentType: { type: 'string' },
       toolName: { type: 'string' },
       toolUseId: { type: 'string' },
       durationMs: { type: 'string' },
+      isInterrupt: { type: 'string' },
+      taskId: { type: 'string' },
+      mcpServer: { type: 'string' },
+      holodeckServer: { type: 'string' },
     },
   },
 }
@@ -141,7 +148,8 @@ export async function runChannel(agentId: string, version: string): Promise<void
   // instructions. A failure here exits non-zero, which Claude Code shows as
   // this server being `failed` in `/mcp`.
   const { identity, instructions: holodeckInstructions } = await fetchAgentSession(serverUrl, await getToken())
-  const activity = createActivityReporter(serverUrl, getToken, log)
+  const delivery = createLiveActivityDelivery({ serverUrl, getToken, log })
+  const activity = createChannelActivityReporter({ send: delivery.enqueue })
 
   const mcp = new Server(
     { name: 'holodeck-channel', version },
@@ -190,8 +198,9 @@ export async function runChannel(agentId: string, version: string): Promise<void
     }
     try {
       const result = await withMcpClient(serverUrl, await getToken(), (client) => client.callTool(request.params))
-      if (TRACKED_TASK_TOOLS.has(request.params.name)) {
-        activity.observeTaskToolCall(request.params.name, request.params.arguments, result)
+      if (request.params.name === 'create_task') {
+        const toolUseId = request.params._meta?.['claudecode/toolUseId']
+        activity.observeCreatedTask(typeof toolUseId === 'string' ? toolUseId : undefined, result)
       }
       return result
     } catch (error) {
@@ -273,7 +282,7 @@ export async function runChannel(agentId: string, version: string): Promise<void
       return
     }
     shuttingDown = true
-    activity.stop()
+    await delivery.stop()
     await connection.stop()
     process.exit(0)
   }
