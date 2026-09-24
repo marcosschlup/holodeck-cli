@@ -88,6 +88,39 @@ describe('channel activity reporter', () => {
     assert.deepEqual([bEnded?.kind, bEnded?.runId, bEnded?.contextTaskId], ['run_ended', 's1:agentB', 'cmothertask000000000000001'])
   })
 
+  it('keeps a background subagent on its own Task when it starts again to read its shell result', () => {
+    const { sent, hook, holodeckTool, succeeded } = setUp()
+    const inA = { agentId: 'agentA', agentType: 'general-purpose' }
+    hook('turn_started')
+    holodeckTool('toolu_main', 'get_task', 'TES-1')
+    hook('subagent_started', inA)
+    holodeckTool('toolu_a', 'get_task', 'TES-2', inA)
+    succeeded('toolu_a', `mcp__${SERVER}__get_task`, inA)
+    hook('subagent_stopped', inA)
+    // Measured: the same agent_id starts and stops again once its background shell finishes.
+    hook('subagent_started', inA)
+    hook('subagent_stopped', inA)
+
+    assert.deepEqual(
+      sent.slice(-2).map((event) => [event.kind, event.lineId, event.contextTaskDisplayId]),
+      [
+        ['run_started', 'agentA', 'TES-2'],
+        ['run_ended', 'agentA', 'TES-2'],
+      ],
+    )
+  })
+
+  it('ignores a subagent stop for a line it never saw', () => {
+    const { sent, hook } = setUp()
+    hook('turn_started')
+    hook('subagent_stopped', { agentId: 'agentUnknown' })
+
+    assert.deepEqual(
+      sent.map((event) => event.kind),
+      ['run_started'],
+    )
+  })
+
   it('links two parallel create_task calls to the right hooks', () => {
     const { reporter, sent, hook, holodeckTool, succeeded } = setUp()
     hook('turn_started')

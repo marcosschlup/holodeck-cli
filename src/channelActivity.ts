@@ -66,6 +66,11 @@ interface SessionState {
   lines: Map<string, LineState>
   inFlight: Map<string, InFlightTool>
   createdTasks: Map<string, TaskRef>
+  // The last context of each subagent that stopped: a background subagent
+  // starts again under the same agent_id to read its own background shell's
+  // result (measured in HOL-175's prod test), and that work is still on its
+  // own Task, not main's.
+  stoppedContexts: Map<string, TaskRef | undefined>
 }
 
 const MAIN_LINE = 'main'
@@ -101,7 +106,7 @@ export function createChannelActivityReporter({
   function sessionFor(sessionId: string): SessionState {
     let session = sessions.get(sessionId)
     if (!session) {
-      session = { seq: 0, mainRunOpen: false, lines: new Map(), inFlight: new Map(), createdTasks: new Map() }
+      session = { seq: 0, mainRunOpen: false, lines: new Map(), inFlight: new Map(), createdTasks: new Map(), stoppedContexts: new Map() }
       sessions.set(sessionId, session)
     }
     return session
@@ -139,7 +144,8 @@ export function createChannelActivityReporter({
   }
 
   // A subagent line normally exists from `SubagentStart`; one seen first
-  // through a tool call is created on the spot, with main's context.
+  // through a tool call is created on the spot. It starts from its own last
+  // context if it ran before, else main's.
   function lineFor(sessionId: string, session: SessionState, agentId: string | undefined, agentType: string | undefined, promptId: string | undefined): [string, LineState] {
     if (!agentId) {
       let main = session.lines.get(MAIN_LINE)
@@ -151,7 +157,8 @@ export function createChannelActivityReporter({
     }
     let line = session.lines.get(agentId)
     if (!line) {
-      line = { lineType: agentType, runId: `${sessionId}:${agentId}`, context: session.lines.get(MAIN_LINE)?.context }
+      const context = session.stoppedContexts.has(agentId) ? session.stoppedContexts.get(agentId) : session.lines.get(MAIN_LINE)?.context
+      line = { lineType: agentType, runId: `${sessionId}:${agentId}`, context }
       session.lines.set(agentId, line)
     }
     return [agentId, line]
@@ -277,13 +284,17 @@ export function createChannelActivityReporter({
       }
 
       case 'subagent_stopped': {
-        if (!agentId) {
+        // A stop for a line never seen has nothing to close. Claude Code sent
+        // two of these in HOL-175's prod test, for agent_ids with no
+        // agent_type and no other event.
+        const line = agentId ? session.lines.get(agentId) : undefined
+        if (!agentId || !line) {
           return
         }
-        const [lineId, line] = lineFor(sessionId, session, agentId, agentType, promptId)
-        closeInFlight(sessionId, session, (id) => id === lineId)
-        emit(sessionId, session, lineId, line.runId, 'run_ended', { outcome: 'success' })
-        session.lines.delete(lineId)
+        closeInFlight(sessionId, session, (id) => id === agentId)
+        emit(sessionId, session, agentId, line.runId, 'run_ended', { outcome: 'success' })
+        session.stoppedContexts.set(agentId, line.context)
+        session.lines.delete(agentId)
         return
       }
 
