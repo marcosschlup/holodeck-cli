@@ -11,9 +11,9 @@ type AgentActivityEvent =
   | { type: 'tool_finished'; runId: string; taskId?: string; mode: AgentActivityMode; at: string; toolName: string; toolUseId: string; durationMs: number }
 
 // "Agent live activity" Intention (docs/agent-live-activity.md in
-// task-manager), Task 4/7 (HOL-164). The Headless counterpart to
-// agentActivity.ts's Channel reporter: same wire shape
-// (`AgentActivityEvent`), same delivery queue (activityDelivery.ts), but the
+// task-manager), Task 4/7 (HOL-164). The Headless counterpart to V1's
+// Channel reporter (since replaced by channelActivity.ts): V1 wire shape
+// (`AgentActivityEvent`), delivered by activityDelivery.ts, but the
 // raw source is a spawned `claude -p --output-format stream-json`
 // process's stdout instead of Claude Code's own hooks — Headless gets no
 // hooks at all (confirmed in the spike; there's nothing to receive one),

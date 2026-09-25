@@ -1,12 +1,10 @@
 import { CONNECTOR_USER_AGENT } from './holodeck.js'
 
-// Shared by agentActivity.ts (Channel, HOL-163) and headlessActivity.ts
-// (Headless, HOL-164): once a transport has already reduced its own raw
-// source (a hook call, a stream-json line) into an `AgentActivityEvent`,
-// getting it to `POST /agent/activity` is identical either way — queue it,
-// never make the caller wait on the network, drain on a timer, tolerate the
-// backend being down. Kept in its own file rather than duplicated, or
-// living in either transport's own file.
+// V1 delivery to `POST /agent/activity`, which the backend no longer has
+// (HOL-178). Only headlessActivity.ts still uses it, and nothing runs that
+// yet; HOL-179 moves Headless onto liveActivityDelivery.ts and removes this
+// file. Queues events, never makes the caller wait on the network, drains
+// on a timer.
 
 const MAX_QUEUE_SIZE = 200
 const SEND_INTERVAL_MS = 1000

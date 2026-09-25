@@ -160,11 +160,10 @@ async function setUpChannelAgent(agent: AgentSummary, verbose: boolean): Promise
 // Each event gets its own `input` template, listing only the fields that
 // event actually has (`duration_ms` only exists on PostToolUse, for
 // instance) — and, just as importantly, never `${tool_input}` or
-// `${tool_response}`. That omission IS the reduction agentActivity.ts's own
-// header comment describes: Claude Code only ever substitutes what a
-// template names, so the full tool input/output this design explicitly
-// excludes is never sent to this tool call in the first place, regardless
-// of what agentActivity.ts's handler does with what it does receive.
+// `${tool_response}`. Claude Code only ever substitutes what a template
+// names, so the full tool input/output this design excludes is never sent
+// to this tool call in the first place, whatever channelActivity.ts's
+// handler does with what it does receive.
 //
 // V2 (docs/agent-live-activity-v2.md, sections 3.1 and 6.1): every hook also
 // templates `agent_id`/`agent_type` (present only inside a subagent) and the
