@@ -2,7 +2,7 @@
   "name": "agent-connector",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "bin": {
     "holodeck": "./dist/cli.js"
