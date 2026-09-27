@@ -11,7 +11,9 @@ import {
   sendExecutionHeartbeat,
   type ClaimedExecution,
 } from './executionApi.js'
+import { createHeadlessActivityReporter } from './headlessActivity.js'
 import { getAgentAccessToken, listMyAgents } from './holodeckApi.js'
+import { createLiveActivityDelivery } from './liveActivityDelivery.js'
 import {
   buildRunArguments,
   buildRunPrompt,
@@ -97,6 +99,8 @@ export function startHeadlessWorker(
   const runs = new Map<string, ActiveRun>()
   const mcpConfigPath = writeMcpConfig(record.agentId)
   const gitRepository = isGitRepository(record.cwd)
+  // Live activity of every run of this Agent (HOL-179), batched to Holodeck.
+  const delivery = createLiveActivityDelivery({ serverUrl, getToken, log: agentLog })
   let paused = false
   let replaced = false
   let claiming = false
@@ -145,6 +149,12 @@ export function startHeadlessWorker(
     const worktreeName = (await gitRepository) ? worktreeNameFor(execution) : undefined
     const claudeToken = loadClaudeToken()
     const { summary, add } = createRunSummary()
+    const activity = createHeadlessActivityReporter({
+      entryId: execution.id,
+      task: { taskId: execution.task.id },
+      holodeckToolPrefix: `mcp__${HOLODECK_MCP_SERVER}__`,
+      send: delivery.enqueue,
+    })
     const started = startRun({
       executable,
       args: buildRunArguments({ mcpConfigPath, worktreeName, model: agent?.model ?? null, effort: agent?.effort ?? null }),
@@ -152,12 +162,16 @@ export function startHeadlessWorker(
       cwd: record.cwd,
       env: { ...process.env, ...(claudeToken ? { CLAUDE_CODE_OAUTH_TOKEN: claudeToken } : {}) },
       streamFile: streamFilePath(record.agentId, execution.id),
-      onLine: add,
+      onLine: (line) => {
+        add(line)
+        activity.handleLine(line)
+      },
     })
     const active: ActiveRun = { execution, child: started.child, stoppedByServer: false }
     runs.set(execution.id, active)
     void started.exited.then(async (exit) => {
       runs.delete(execution.id)
+      activity.finish(active.stoppedByServer || active.stoppedHere ? 'interrupted' : judgeRun(exit, summary).success ? 'success' : 'error')
       await finish(execution, startedAt, exit, summary, {
         stoppedByServer: active.stoppedByServer,
         reason: active.stoppedHere,
@@ -287,6 +301,7 @@ export function startHeadlessWorker(
       paused = true
       clearInterval(heartbeat)
       await Promise.all([connection?.stop(), endRuns(reason)])
+      await delivery.stop()
     },
   }
 }
