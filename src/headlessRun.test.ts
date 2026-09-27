@@ -20,7 +20,18 @@ describe('buildRunPrompt', () => {
   it('names the task and what to do for each trigger', () => {
     assert.match(buildRunPrompt(execution('assignment')), /TES-12 \("Fix the login redirect"\) was assigned to you.*start_working_on_task/)
     assert.match(buildRunPrompt(execution('block_resolved')), /block on Holodeck task TES-12.*get_task_activity/)
-    assert.match(buildRunPrompt(execution('mention')), /mentioned in a note on Holodeck task TES-12.*list_my_mentions/)
+    const mentioned = buildRunPrompt({
+      ...execution('mention'),
+      mentions: [
+        { text: '@bot can you check the logs?', authorName: 'Marcos', authorHandle: 'marcosschlup', at: '2026-09-27T12:00:00.000Z' },
+        { text: '@bot and the metrics', authorName: null, authorHandle: null, at: '2026-09-27T12:01:00.000Z' },
+      ],
+    })
+    assert.equal(
+      mentioned.split('\n').slice(0, 3).join('\n'),
+      'You were mentioned in notes on Holodeck task TES-12 ("Fix the login redirect"):\n- Marcos (@marcosschlup) wrote: @bot can you check the logs?\n- Someone wrote: @bot and the metrics',
+    )
+    assert.match(mentioned, /answer with add_interaction/)
     for (const trigger of ['assignment', 'block_resolved'] as const) {
       assert.match(buildRunPrompt(execution(trigger)), /raise_blocked/)
     }

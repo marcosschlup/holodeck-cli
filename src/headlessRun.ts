@@ -45,8 +45,16 @@ export function buildRunPrompt(execution: ClaimedExecution): string {
   switch (execution.trigger) {
     case 'block_resolved':
       return `A block on Holodeck task ${task}, which is assigned to you, was just resolved. ${tools} Read the task with get_task and its latest activity with get_task_activity to find the answer, then carry on with the work. ${finish}`
-    case 'mention':
-      return `You were mentioned in a note on Holodeck task ${task}. ${tools} Read it with list_my_mentions and get_task, and do what it asks; answer with add_interaction. If it asks you to work on the task, ${finish.charAt(0).toLowerCase()}${finish.slice(1)}`
+    case 'mention': {
+      const notes = (execution.mentions ?? []).map(
+        (mention) => `- ${mention.authorName ?? 'Someone'}${mention.authorHandle ? ` (@${mention.authorHandle})` : ''} wrote: ${mention.text}`,
+      )
+      return [
+        `You were mentioned in ${notes.length > 1 ? 'notes' : 'a note'} on Holodeck task ${task}:`,
+        ...notes,
+        `${tools} Read the task with get_task for context, do what ${notes.length > 1 ? 'they ask' : 'it asks'}, and answer with add_interaction, tagging the author with exactly the @handle shown above (a name or an email address doesn't tag anyone). You don't have to work on the task itself unless you are asked to; if you are, ${finish.charAt(0).toLowerCase()}${finish.slice(1)}`,
+      ].join('\n')
+    }
     case 'assignment':
       return `Holodeck task ${task} was assigned to you. ${tools} Start with start_working_on_task, then read the task with get_task. ${finish}`
   }

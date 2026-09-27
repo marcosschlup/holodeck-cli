@@ -14,6 +14,10 @@ export interface ClaimedExecution {
   enqueuedAt: string
   startedAt: string
   task: { id: string; displayId: string; title: string; projectId: string }
+  // For a `mention` run (HOL-147): the notes on this Task that tagged the Agent
+  // and it hadn't read, oldest first. Holodeck marks them read at the claim, so
+  // they reach the run only through its prompt.
+  mentions?: { text: string; authorName: string | null; authorHandle: string | null; at: string }[]
 }
 
 // The entry isn't running any more on the server (finished, or failed as
