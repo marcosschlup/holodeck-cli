@@ -3,16 +3,14 @@ import path from 'node:path'
 import { configDir } from './paths.js'
 import { DEFAULT_SERVER_URL } from './holodeck.js'
 
-// The Holodeck server every persona on this machine talks to — one daemon,
-// one server (unlike the Holodeck token, which is per-persona). Set once
-// via `holodeck config set-server`, not re-asked on every `register`.
+// The Holodeck server `holodeck login` signs in to (and every Agent on this
+// machine then talks to). Set once via `holodeck config set-server`.
 //
 // `claudeToken` (HOL-57) is a `CLAUDE_CODE_OAUTH_TOKEN` — minted once via
-// `claude setup-token`, machine-wide like serverUrl (one Claude
-// subscription covers every persona registered here, for v1 — see
-// PLAN.md 9's Agent SDK auth decision). Same sensitivity class as a
-// bearer token, so this file gets the same 0600 restriction store.ts's
-// personas.json already has.
+// `claude setup-token`, machine-wide like serverUrl. When set, background
+// Agents' `claude -p` runs authenticate with it (HOL-131); otherwise they use
+// this machine's own Claude Code login. Same sensitivity class as a bearer
+// token, so this file is restricted to the owner (0600).
 interface ConfigFile {
   serverUrl?: string
   claudeToken?: string

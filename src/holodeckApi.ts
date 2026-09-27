@@ -47,6 +47,9 @@ export interface AgentSummary {
   vendor: string | null
   model: string | null
   effort: string | null
+  // How many runs of a Headless Agent may go at once (HOL-129); 1 for the
+  // other types, which don't use it.
+  maxConcurrentSessions: number
   // The Organization the Agent belongs to (HOL-149). Not used yet: there is one
   // Organization per person today; kept so the selectors can label Agents by it
   // once there can be several.
@@ -93,10 +96,10 @@ async function currentCredential(): Promise<LoginCredential> {
   return Date.now() >= credential.expiresAt - EXPIRY_MARGIN_MS ? refreshCredential(credential) : credential
 }
 
-async function apiFetch(pathAndQuery: string, body?: unknown): Promise<Response> {
+async function apiFetch(pathAndQuery: string, body?: unknown, method: 'POST' | 'PATCH' = 'POST'): Promise<Response> {
   const send = (credential: LoginCredential) =>
     fetch(new URL(pathAndQuery, credential.serverUrl), {
-      method: body === undefined ? 'GET' : 'POST',
+      method: body === undefined ? 'GET' : method,
       headers: {
         authorization: `Bearer ${credential.accessToken}`,
         'user-agent': CONNECTOR_USER_AGENT,
@@ -166,4 +169,14 @@ export async function getAgentAccessToken(agentId: string, purpose: AgentTokenPu
   const token = (await response.json()) as AgentAccessToken
   agentTokenCache.set(agentId, token)
   return token
+}
+
+// `holodeck agent setup` for a Headless Agent (HOL-129/131): the Agent's own
+// setting in Holodeck, the same one the Manage Agents page edits, never a local
+// copy. Holodeck checks the range (1 to 5).
+export async function setMaxConcurrentSessions(agentId: string, maxConcurrentSessions: number): Promise<void> {
+  const response = await apiFetch(`/cli/agents/${encodeURIComponent(agentId)}`, { maxConcurrentSessions }, 'PATCH')
+  if (!response.ok) {
+    throw await toApiError(response)
+  }
 }

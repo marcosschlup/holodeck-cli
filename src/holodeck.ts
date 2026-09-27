@@ -42,7 +42,7 @@ export async function withMcpClient<T>(serverUrl: string, token: string, fn: (cl
 }
 
 // Calls a no-argument MCP tool and parses its JSON text result — every
-// tool this CLI calls (get_my_context, report_health, report_disconnect)
+// tool this CLI calls this way (report_health, report_disconnect)
 // takes no arguments and returns `jsonResult(...)` shaped JSON
 // (backend/src/mcp/server.ts's own helper).
 async function callJsonTool<T>(serverUrl: string, token: string, name: string): Promise<T> {
@@ -51,14 +51,6 @@ async function callJsonTool<T>(serverUrl: string, token: string, name: string): 
     const content = result.content as { type: string; text: string }[]
     return JSON.parse(content[0]!.text) as T
   })
-}
-
-// Same identity a session Agent gets handed at connection time, resolved
-// here purely to prove the token is valid and to get a real name to
-// register with instead of a placeholder (HOL-54). Throws on an invalid
-// token or an unreachable server — the caller decides how to report that.
-export function resolveAgentIdentity(serverUrl: string, token: string): Promise<AgentIdentity> {
-  return callJsonTool<AgentIdentity>(serverUrl, token, 'get_my_context')
 }
 
 // Everything a Channel (HOL-130) needs to introduce itself, from ONE

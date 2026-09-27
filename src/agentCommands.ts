@@ -9,14 +9,16 @@ import {
   type AgentSummary,
 } from './holodeckApi.js'
 import { findChannelConfigs, isMissingFromGitIgnore, isServerNameTaken, writeChannelConfig, type ChannelConfig } from './mcpConfig.js'
+import { backgroundAgents, listBackgroundAgents, setUpHeadlessAgent, startBackgroundAgent } from './headlessCommands.js'
+import type { PersonaRecord } from './store.js'
 import { maybeNoticeUpdate } from './updateNotice.js'
 import { readOwnVersion } from './version.js'
 
 // `holodeck agent setup` / `agent start` / `agent list` (HOL-135): the CLI as
 // seen from the AGENT's side. The user says "set up Adam" and "start Adam"; what
-// that means (today: a Claude Code session with the Agent's Channel; later,
-// for background Agents, the daemon: HOL-131) is decided here from the Agent's
-// type, which comes from the server. Nothing the person sees should talk about
+// that means (a Claude Code session with the Agent's Channel, or, for an Agent
+// that works in the background, the daemon: HOL-131, headlessCommands.ts) is
+// decided here from the Agent's type, which comes from the server. Nothing the person sees should talk about
 // "channels", config files or Claude Code flags unless they ask (`--verbose`).
 // No Agent name is ever an argument (HOL-132): choosing an Agent is a selector.
 
@@ -97,9 +99,8 @@ async function resolveConfigured(
   return { entries, namesMayBeStale: false }
 }
 
-// The Agent types `agent setup` knows how to prepare. Background Agents
-// (`headless`) join when HOL-131 adds their setup.
-const SETUP_MODES: AgentSummary['connectionMode'][] = ['channel']
+// The Agent types `agent setup` knows how to prepare.
+const SETUP_MODES: AgentSummary['connectionMode'][] = ['channel', 'headless']
 
 // The runner `agent start` knows how to launch is Claude Code (HOL-138); an
 // Agent of another vendor would need its own launcher.
@@ -254,7 +255,7 @@ export async function runAgentSetup(options: { verbose?: boolean } = {}): Promis
   const notYet = agents.filter((agent) => agent.connectionMode !== 'session' && !ready.includes(agent))
   if (ready.length === 0) {
     console.log(
-      "None of your Agents can be set up here yet. In Holodeck, create an Agent of type Channel (Manage Agents), then run this again.",
+      'None of your Agents can be set up here yet. In Holodeck, create an Agent of type Channel or Headless (Manage Agents), then run this again.',
     )
     if (notYet.length > 0) {
       console.log(`${notYet.map((agent) => agent.name).join(', ')} can't be set up from the command line yet.`)
@@ -272,6 +273,10 @@ export async function runAgentSetup(options: { verbose?: boolean } = {}): Promis
     message: 'Which Agent do you want to set up here?',
     choices: ready.map((candidate) => ({ name: candidate.name, value: candidate })),
   })
+  if (agent.connectionMode === 'headless') {
+    await setUpHeadlessAgent(agent, Boolean(options.verbose))
+    return
+  }
   const configured = await setUpChannelAgent(agent, Boolean(options.verbose))
   if (!configured || !isInteractive()) {
     return
@@ -281,58 +286,87 @@ export async function runAgentSetup(options: { verbose?: boolean } = {}): Promis
   }
 }
 
+// What `agent start` can start: the Channel Agents set up in this folder, and
+// the Agents that work in the background on this machine (from any folder).
+type Startable = { kind: 'channel'; entry: ConfiguredAgent } | { kind: 'background'; record: PersonaRecord }
+
 export async function runAgentStart(extraArguments: string[], options: { verbose?: boolean } = {}): Promise<void> {
   await maybeNoticeUpdate(readOwnVersion())
   const configs = findChannelConfigs(process.cwd())
-  if (configs.length === 0) {
+  const background = backgroundAgents()
+  if (configs.length === 0 && background.length === 0) {
     console.log('No Agents are set up in this folder yet. Run: holodeck agent setup')
     return
   }
-  const resolved = await resolveConfigured(configs)
-  if ('error' in resolved) {
-    console.log(resolved.error)
-    return
-  }
-  const { entries, namesMayBeStale } = resolved
-
-  let chosen: ConfiguredAgent
-  if (entries.length === 1) {
-    // Nothing to choose: say which one, then go.
-    chosen = entries[0] as ConfiguredAgent
-    if (!chosen.available) {
-      console.log(`${chosen.name} is ${chosen.problem}. Run: holodeck agent setup`)
+  let entries: ConfiguredAgent[] = []
+  let namesMayBeStale = false
+  if (configs.length > 0) {
+    const resolved = await resolveConfigured(configs)
+    if ('error' in resolved) {
+      console.log(resolved.error)
       return
     }
-  } else if (entries.every((entry) => !entry.available)) {
+    entries = resolved.entries
+    namesMayBeStale = resolved.namesMayBeStale
+  }
+  const startables: Startable[] = [
+    ...entries.map((entry): Startable => ({ kind: 'channel', entry })),
+    ...background.map((record): Startable => ({ kind: 'background', record })),
+  ]
+
+  let chosen: Startable
+  if (startables.length === 1) {
+    // Nothing to choose: say which one, then go.
+    chosen = startables[0] as Startable
+    if (chosen.kind === 'channel' && !chosen.entry.available) {
+      console.log(`${chosen.entry.name} is ${chosen.entry.problem}. Run: holodeck agent setup`)
+      return
+    }
+  } else if (background.length === 0 && entries.every((entry) => !entry.available)) {
     console.log('None of the Agents set up in this folder can be started any more. Run: holodeck agent setup')
     return
   } else {
-    chosen = await select({
+    chosen = await select<Startable>({
       message: 'Which Agent should start?',
-      choices: entries.map((entry) => ({ name: entry.name, value: entry, disabled: entry.available ? false : (entry.problem ?? true) })),
+      choices: startables.map((startable) =>
+        startable.kind === 'channel'
+          ? {
+              name: startable.entry.name,
+              value: startable,
+              disabled: startable.entry.available ? false : (startable.entry.problem ?? true),
+            }
+          : { name: `${startable.record.name} (works in the background)`, value: startable },
+      ),
     })
+  }
+  if (chosen.kind === 'background') {
+    await startBackgroundAgent(chosen.record)
+    return
   }
   if (namesMayBeStale) {
     console.log("(Couldn't reach Holodeck, so names may be out of date.)")
   }
-  await startConfigured(chosen, extraArguments, Boolean(options.verbose))
+  await startConfigured(chosen.entry, extraArguments, Boolean(options.verbose))
 }
 
 export async function runAgentList(): Promise<void> {
   const configs = findChannelConfigs(process.cwd())
   if (configs.length === 0) {
-    console.log('No Agents are set up in this folder yet. Run: holodeck agent setup')
-    return
+    if (backgroundAgents().length === 0) {
+      console.log('No Agents are set up in this folder yet. Run: holodeck agent setup')
+    }
+  } else {
+    const resolved = await resolveConfigured(configs)
+    if ('error' in resolved) {
+      console.log(resolved.error)
+      return
+    }
+    for (const entry of resolved.entries) {
+      console.log(entry.available ? entry.name : `${entry.name} (${entry.problem})`)
+    }
+    if (resolved.namesMayBeStale) {
+      console.log("(Couldn't reach Holodeck, so names may be out of date.)")
+    }
   }
-  const resolved = await resolveConfigured(configs)
-  if ('error' in resolved) {
-    console.log(resolved.error)
-    return
-  }
-  for (const entry of resolved.entries) {
-    console.log(entry.available ? entry.name : `${entry.name} (${entry.problem})`)
-  }
-  if (resolved.namesMayBeStale) {
-    console.log("(Couldn't reach Holodeck, so names may be out of date.)")
-  }
+  await listBackgroundAgents()
 }

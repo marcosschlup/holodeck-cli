@@ -16,10 +16,12 @@ section 9 ("Channel and headless").
 
 You need:
 
-- **A Holodeck account**, with at least one Agent of type **Channel**
-  (created from Holodeck's Web UI: **Manage your agents → Create agent**,
-  connection type **Channel**) registered into the Project you want it to
-  work in (that Project's **Add member** dialog, under **Your agent**).
+- **A Holodeck account**, with at least one Agent of type **Channel** or
+  **Headless** (created from Holodeck's Web UI: **Manage your agents →
+  Create agent**) registered into the Project you want it to work in (that
+  Project's **Add member** dialog, under **Your agent**). A Channel Agent is
+  a Claude Code session you keep open; a Headless Agent works in the
+  background (see "Agents that work in the background" below).
 - **[Claude Code](https://code.claude.com/docs/en/setup) installed and
   already signed in** on this machine — the CLI starts a real `claude`
   session, so whatever gets you a working `claude` session on its own
@@ -111,8 +113,10 @@ type, shows why it can't).
 holodeck login                     Sign in to Holodeck in your browser
 holodeck update [--check]          Update to the latest release
 holodeck agent setup [--verbose]   Prepare one of your Agents to work in this folder
-holodeck agent start [-- ...]      Start an Agent set up in this folder
-holodeck agent list                The Agents set up in this folder
+holodeck agent start [-- ...]      Start an Agent set up in this folder, or a background one
+holodeck agent list                The Agents set up in this folder, and the background ones
+holodeck agent pause / forget      Pause or remove a background Agent
+holodeck logs                      What a background Agent worked on
 
 holodeck config set-server <url>   Which Holodeck server to talk to (machine-wide)
 holodeck config show               Show the current settings
@@ -131,10 +135,45 @@ run`, whose stdout is the MCP protocol channel). Silent on any network
 failure — this is a courtesy, never something that blocks a command. Set
 `HOLODECK_NO_UPDATE_CHECK=1` to skip it entirely (e.g. in a script or CI).
 
-## Not built yet
+## Agents that work in the background
 
-- **Headless Agents** (an Agent that runs a Task in the background
-  without a standing session) — planned, not available from this CLI yet.
+A **Headless** Agent has no session to keep open. `holodeck agent setup`
+asks which folder it works in and how many tasks it may work on at the same
+time (1 to 5; the same setting as in Holodeck's Manage Agents page), then a
+background process on this machine takes over: whenever a task is assigned
+to the Agent, or a block on one of its tasks is resolved, it runs Claude Code
+on that task (`claude -p`, the Agent's model and effort from Holodeck) and
+reports back when it ends. It keeps working after the terminal closes. After
+a reboot it is not running until `holodeck agent start` (or `holodeck start`)
+starts it again; tasks assigned meanwhile wait in Holodeck.
+
+- **Where it works.** In a git repository, each task gets its own worktree
+  (Claude Code's own, under `.claude/worktrees/`, on a `worktree-...`
+  branch), so runs never touch your working copy or each other. A worktree
+  with nothing uncommitted is removed when the run ends (and its branch, if
+  the run made no commits); one with uncommitted changes is kept for you to
+  look at. Add `.claude/worktrees/` to your `.gitignore`. In a folder that
+  isn't a git repository it works on one task at a time, in the folder itself.
+- **Permissions.** Nobody is there to approve anything, so runs use Claude
+  Code's auto permission mode and anything that would still ask is refused.
+  Auto mode depends on the model: on one that doesn't support it, Claude Code
+  falls back to asking, which means every edit is refused (`holodeck logs`
+  says so).
+- **When a run fails** (or this machine stops reporting it for 5 minutes),
+  Holodeck blocks the task with the reason. Resolving that block runs it
+  again.
+
+```
+holodeck agent pause               Stop a background Agent taking new tasks (running ones finish)
+holodeck agent start               Take work again
+holodeck agent forget              Stop it working on this machine at all
+holodeck logs [--verbose]          Its latest runs: task, result, duration, cost
+holodeck status / stop             The background process itself
+holodeck config set-claude-token   A Claude token for its runs (default: this machine's Claude Code login)
+```
+
+Its own log (connections, runs starting and ending) is `daemon.log` in the
+CLI's data folder.
 
 ## Development
 

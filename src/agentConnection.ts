@@ -1,9 +1,9 @@
 import { CONNECTOR_USER_AGENT, reportDisconnect, reportHealth } from './holodeck.js'
 
-// Who the connection acts as. `token` is a plain string for a daemon persona
-// (`PersonaRecord`'s static token), or a function for a Channel (HOL-130),
-// whose Agent-scoped token expires hourly and is fetched fresh each time it's
-// needed (holodeckApi.ts's getAgentAccessToken keeps it cached and renewed).
+// Who the connection acts as. `token` is a function for a Channel (HOL-130)
+// and a Headless Agent (HOL-131), whose Agent-scoped token expires hourly and
+// is fetched fresh each time it's needed (holodeckApi.ts's getAgentAccessToken
+// keeps it cached and renewed); a plain string also works.
 export interface ConnectionIdentity {
   name: string
   token: string | (() => Promise<string>)
@@ -86,6 +86,15 @@ export interface AgentMentionedEvent {
   data: { mentionId: string; interactionId?: string; taskDisplayId?: string; intentionId?: string; authorName?: string }
 }
 
+// A Headless Agent's queue got a new entry (HOL-129, backend
+// domains/task/service.ts's notifyQueuedExecution): only a nudge to claim; the
+// daemon also claims on every (re)connect, so a missed one loses nothing.
+export interface ExecutionQueuedEvent {
+  type: 'execution_queued'
+  projectId: string
+  taskId: string
+}
+
 // PLAN.md "Web UI: remote Stop" (HOL-77) — the owner clicked "Stop" in the
 // Web UI. Same shape as the other minimal pushes: no payload beyond the
 // type itself, this connection already knows which persona it is.
@@ -94,6 +103,11 @@ export interface AgentStopRequestedEvent {
 }
 
 export interface PersonaConnectionHandlers {
+  // False for an Agent with no online presence (Headless, HOL-131): it doesn't
+  // answer `health_check` pushes or report its disconnect, since the tools for
+  // both (report_health, report_disconnect) only exist for Channel Agents.
+  // Defaults to true.
+  tracksPresence?: boolean
   // Where this connection's own status lines go (connected, dropped, ...).
   // Defaults to stdout - which a Channel can't use: its stdout IS the MCP
   // stdio transport to Claude Code, so anything else written there corrupts
@@ -132,6 +146,8 @@ export interface PersonaConnectionHandlers {
   onAgentRemovedFromProject?: (event: AgentRemovedFromProjectEvent) => void
   // Fired when someone tags this Agent in a note (HOL-145).
   onAgentMentioned?: (event: AgentMentionedEvent) => void
+  // Fired when a Headless Agent's queue gets work (HOL-129).
+  onExecutionQueued?: (event: ExecutionQueuedEvent) => void
   // Fired when the owner clicks "Stop" in the Web UI (HOL-77) — the
   // handler is expected to actually stop the persona (close the session,
   // this connection, and report the disconnect), same as a local
@@ -187,9 +203,13 @@ export function startPersonaConnection(
       | AgentAddedToProjectEvent
       | AgentRemovedFromProjectEvent
       | AgentMentionedEvent
+      | ExecutionQueuedEvent
       | AgentStopRequestedEvent
       | { type: string }
     if (event.type === 'health_check') {
+      if (handlers?.tracksPresence === false) {
+        return
+      }
       try {
         const report = await reportHealth(serverUrl, await resolveToken(record))
         log(`answered health_check (uptime ${report.uptimeMs ?? '?'}ms)`)
@@ -223,6 +243,8 @@ export function startPersonaConnection(
       const mentioned = event as AgentMentionedEvent
       log(`mentioned in ${mentioned.data.taskDisplayId ?? 'an intention'}`)
       handlers?.onAgentMentioned?.(mentioned)
+    } else if (event.type === 'execution_queued') {
+      handlers?.onExecutionQueued?.(event as ExecutionQueuedEvent)
     } else if (event.type === 'agent_stop_requested') {
       log('stop requested from Web UI')
       handlers?.onAgentStopRequested?.(event as AgentStopRequestedEvent)
@@ -315,10 +337,12 @@ export function startPersonaConnection(
       }
       stopped = true
       abortController?.abort()
-      try {
-        await reportDisconnect(serverUrl, await resolveToken(record))
-      } catch (error) {
-        log(`failed to report disconnect: ${String(error)}`)
+      if (handlers?.tracksPresence !== false) {
+        try {
+          await reportDisconnect(serverUrl, await resolveToken(record))
+        } catch (error) {
+          log(`failed to report disconnect: ${String(error)}`)
+        }
       }
       await loopPromise.catch(() => {})
     },

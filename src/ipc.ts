@@ -28,35 +28,31 @@ export function pidFilePath(): string {
 // {method, params} envelope, so each new op adds one variant here instead
 // of a second layer of "what shape is params" to maintain.
 //
-// `register`/`forget` are the daemon-side primitives HOL-53's persistence
-// layer needs (upsert/remove a persona, in the registry and on disk) —
-// not the full `register`/`agent forget` CLI experience. HOL-54 is what
-// resolves a token into a real Holodeck Agent name before calling
-// `register` here; `name` below is already resolved by the time it
-// reaches the daemon.
-//
-// `pause`/`unpause` (added after HOL-55) are `agent pause`/`agent
-// unpause`'s own primitives — unlike `forget`, neither touches the
-// stored token, only whether the daemon holds a live connection for that
-// persona right now and whether it should come back automatically on the
-// daemon's own next start (store.ts's `PersonaRecord.paused`). Deliberately
-// not folded into the daemon-level `start`/`stop` ops below — a command
-// meaning two different things depending on whether a persona argument
-// happens to be there reads as ambiguous, so per-persona and daemon-level
-// lifecycle stay entirely separate at the CLI layer too (the `agent`
-// command group, cli.ts).
-// `restart` (HOL-57) restarts a persona's live Claude Agent SDK session
-// only — its /agent/events connection and store record are untouched, so
-// this is a lighter operation than pause+unpause, not a shortcut for it.
+// The per-Agent ops are about the Agents that work in the background on this
+// machine (HOL-131, store.ts): `register` (from `holodeck agent setup`) adds
+// one and puts it to work; `pause`/`unpause` stop and resume taking new work
+// without forgetting it; `forget` removes it. Daemon-level lifecycle
+// (`status`, `shutdown`) stays separate, so no command means two things
+// depending on whether an Agent was named.
 export type IpcRequest =
   | { op: 'status' }
-  | { op: 'register'; name: string; token: string; cwd?: string; model?: string }
-  | { op: 'pause'; name: string }
-  | { op: 'unpause'; name: string }
-  | { op: 'restart'; name: string }
-  | { op: 'forget'; name: string }
+  | { op: 'register'; agentId: string; name: string; cwd: string }
+  | { op: 'pause'; agentId: string }
+  | { op: 'unpause'; agentId: string }
+  | { op: 'forget'; agentId: string }
   | { op: 'list' }
   | { op: 'shutdown' }
+
+// What `list` reports for one Agent: `status` is 'paused', 'connecting',
+// 'reconnecting', 'connected' or 'replaced' (another machine took the Agent
+// over), `running` how many runs it has going right now.
+export interface PersonaStatus {
+  agentId: string
+  name: string
+  cwd: string
+  status: string
+  running: number
+}
 
 // Discriminated on `op` for the success case (so each op's response only
 // carries the fields that op actually has), collapsed to one shared shape
@@ -67,9 +63,8 @@ export type IpcResponse =
   | { op: 'register'; ok: true }
   | { op: 'pause'; ok: true; found: boolean }
   | { op: 'unpause'; ok: true; found: boolean }
-  | { op: 'restart'; ok: true; found: boolean }
   | { op: 'forget'; ok: true; removed: boolean }
-  | { op: 'list'; ok: true; personas: { name: string; cwd?: string; status: string }[] }
+  | { op: 'list'; ok: true; personas: PersonaStatus[] }
   | { op: 'shutdown'; ok: true }
   | { ok: false; error: string }
 
@@ -87,9 +82,8 @@ export function createIpcServer(handler: IpcHandler): net.Server {
     // sendIpcRequest timeout, cli.ts) and destroyed its end of the
     // socket turns the eventual `socket.end()` below into an unhandled
     // EPIPE — an 'error' event with no listener crashes the whole daemon
-    // process, not just this one connection. A slow handler (e.g.
-    // starting a persona's Claude session, HOL-57) makes this easy to
-    // hit in practice, not just a theoretical race.
+    // process, not just this one connection. A slow handler makes this
+    // easy to hit in practice, not just a theoretical race.
     socket.on('error', () => {})
     let buffer = ''
     socket.on('data', (chunk: Buffer) => {
@@ -144,8 +138,7 @@ function isAddressStale(address: string): Promise<boolean> {
   })
 }
 
-// Used by every CLI command that needs the daemon (status today;
-// list/stop/register once HOL-53/54 land) — resolves to `null` rather than
+// Used by every CLI command that needs the daemon — resolves to `null` rather than
 // throwing when nothing is listening, so callers can print a plain "daemon
 // isn't running" instead of an ECONNREFUSED stack trace.
 export function sendIpcRequest(request: IpcRequest, timeoutMs = 2000): Promise<IpcResponse | null> {

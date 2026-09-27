@@ -2,61 +2,48 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { configDir } from './paths.js'
 
-// One registered persona, as persisted to disk (PLAN.md 9, "Registered
-// personas must survive a daemon restart"). `name` is the Agent's own
-// name in Holodeck, not a locally-invented alias (HOL-52's own CLI
-// design decision) — HOL-54 is what actually resolves it for real via
-// Holodeck (get_my_context); this module only stores whatever name it's
-// given.
+// One Agent that works in the background on this machine (HOL-131: a Holodeck
+// Agent of type `headless`), as persisted to disk so a daemon restart or a
+// reboot brings it back without running `holodeck agent setup` again. Holds no
+// secret: the daemon asks Holodeck for a short-lived Agent token when it needs
+// one (holodeckApi.ts's getAgentAccessToken), using the person's own login.
 export interface PersonaRecord {
+  agentId: string
+  // The Agent's name when it was set up, only for display (Holodeck is the
+  // source of truth; `agent list` shows the current one).
   name: string
-  token: string
-  cwd?: string
-  // Claude model this persona's session uses (HOL-57 follow-up) — chosen
-  // in the `register` wizard from `Query.supportedModels()`'s live list,
-  // e.g. `'sonnet'`. Undefined means whatever the Claude Agent SDK
-  // defaults to on its own.
-  model?: string
-  // `holodeck stop <persona>` pauses rather than forgets (decided after
-  // HOL-55: a persona's token is only ever shown once by Holodeck itself,
-  // so silently requiring it again to bring a persona back was a rough
-  // edge) — the token stays here, this just marks that the daemon
-  // shouldn't auto-connect it on its own next start, only on an explicit
-  // `holodeck start <persona>`. `holodeck forget <persona>` is the actual
-  // removal. Undefined/false = active.
+  // The folder its runs work in: a git repository (each run gets its own
+  // worktree of it) or a plain folder (runs one at a time, in place).
+  cwd: string
+  // `holodeck agent pause`: the daemon keeps the record but stops taking new
+  // work for this Agent (runs already going finish), including after a
+  // daemon restart, until `holodeck agent start`. Undefined/false = active.
   paused?: boolean
 }
 
 interface PersonaStoreFile {
-  personas: PersonaRecord[]
+  personas: unknown[]
 }
 
 function storeFilePath(): string {
   return path.join(configDir, 'personas.json')
 }
 
-// Holds bearer tokens, same sensitivity class as a GitHub PAT — restricted
-// to the owning user (POSIX file mode 0600). Considered an OS keychain
-// instead (PLAN.md 9 left this open): every real cross-platform option
-// (e.g. cross-keychain, the keytar successor) still leans on native
-// addons per OS, which fights the SEA single-binary packaging goal this
-// whole CLI is built around (PLAN.md 9, "Distribution/packaging"). A
-// plain, permission-restricted config file is the same posture several
-// major CLIs already ship with (npm's own auth tokens, AWS CLI
-// credentials) — revisit if that trade-off stops being acceptable.
-function restrictPermissions(filePath: string): void {
-  if (process.platform !== 'win32') {
-    fs.chmodSync(filePath, 0o600)
-  }
+function isPersonaRecord(value: unknown): value is PersonaRecord {
+  const record = value as Partial<PersonaRecord> | null
+  return typeof record?.agentId === 'string' && typeof record.name === 'string' && typeof record.cwd === 'string'
 }
 
+// Records of the old daemon model (a static Agent token plus a persistent SDK
+// session, removed in HOL-131) have no `agentId`; they are skipped here and
+// dropped on the next save.
 export function loadPersonas(): PersonaRecord[] {
   const filePath = storeFilePath()
   if (!fs.existsSync(filePath)) {
     return []
   }
   const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as PersonaStoreFile
-  return parsed.personas
+  return parsed.personas.filter(isPersonaRecord)
 }
 
 function savePersonas(personas: PersonaRecord[]): void {
@@ -64,18 +51,16 @@ function savePersonas(personas: PersonaRecord[]): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
   const payload: PersonaStoreFile = { personas }
   fs.writeFileSync(filePath, JSON.stringify(payload, null, 2))
-  restrictPermissions(filePath)
 }
 
-// Adds a new persona, or replaces the existing one with the same name —
-// re-registering the same Agent's token (e.g. after `regenerateToken` in
-// Holodeck) updates it in place rather than leaving a stale duplicate.
+// Adds an Agent, or replaces the one with the same id: setting an Agent up
+// again (a new folder, say) updates it in place.
 export function upsertPersona(record: PersonaRecord): void {
-  const personas = loadPersonas().filter((p) => p.name !== record.name)
+  const personas = loadPersonas().filter((p) => p.agentId !== record.agentId)
   personas.push(record)
   savePersonas(personas)
 }
 
-export function removePersona(name: string): void {
-  savePersonas(loadPersonas().filter((p) => p.name !== name))
+export function removePersona(agentId: string): void {
+  savePersonas(loadPersonas().filter((p) => p.agentId !== agentId))
 }
