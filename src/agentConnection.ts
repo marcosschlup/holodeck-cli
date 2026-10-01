@@ -180,6 +180,11 @@ export function startPersonaConnection(
   let status: ConnectionStatus = 'connecting'
   let stopped = false
   let abortController: AbortController | null = null
+  // Sent on every request of this loop so Holodeck can tell this process
+  // reconnecting from another process using the same Agent: a reconnect that
+  // reaches the server before it noticed the old stream was cut isn't a
+  // "connection replaced" conflict (HOL-184).
+  const connectionId = crypto.randomUUID()
 
   function log(message: string): void {
     const line = `[${record.name}] ${message}`
@@ -294,6 +299,7 @@ export function startPersonaConnection(
             Authorization: `Bearer ${await resolveToken(record)}`,
             'User-Agent': CONNECTOR_USER_AGENT,
             Accept: 'text/event-stream',
+            'X-Holodeck-Connection-Id': connectionId,
           },
           signal: abortController.signal,
         })
