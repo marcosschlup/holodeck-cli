@@ -4,6 +4,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { fetchAgentSession, withMcpClient } from './holodeck.js'
 import { getAgentAccessToken, NotLoggedInError } from './holodeckApi.js'
 import { loadLoginCredential } from './loginCredential.js'
+import { toolsForSession } from './sessionTools.js'
 
 // `holodeck headless mcp <agentId>` (hidden, HOL-131): the Holodeck MCP server
 // a Headless run's `claude -p` spawns over stdio (headlessRun.ts's
@@ -34,7 +35,7 @@ export async function runHeadlessMcp(agentId: string, version: string): Promise<
 
   mcp.setRequestHandler(ListToolsRequestSchema, async (request) => {
     const listed = await withMcpClient(serverUrl, await getToken(), (client) => client.listTools(request.params))
-    return { ...listed, tools: listed.tools.filter((tool) => !HIDDEN_TOOLS.has(tool.name)) }
+    return { ...listed, tools: toolsForSession(listed.tools, HIDDEN_TOOLS) }
   })
   mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (HIDDEN_TOOLS.has(request.params.name)) {

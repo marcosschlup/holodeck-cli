@@ -67,6 +67,8 @@ export interface AgentInstructionsUpdatedEvent {
 export interface AgentAddedToProjectEvent {
   type: 'agent_added_to_project'
   projectId: string
+  // The Project's name. Absent from a Holodeck older than HOL-236.
+  data?: { projectName?: string }
 }
 export interface AgentRemovedFromProjectEvent {
   type: 'agent_removed_from_project'

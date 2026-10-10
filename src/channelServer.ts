@@ -18,6 +18,7 @@ import { fetchAgentSession, withMcpClient } from './holodeck.js'
 import { getAgentAccessToken, NotLoggedInError } from './holodeckApi.js'
 import { loadLoginCredential } from './loginCredential.js'
 import { dataDir } from './paths.js'
+import { toolsForSession } from './sessionTools.js'
 
 // `holodeck channel run <agentId>` (HOL-130): a Claude Code Channel - an MCP
 // server Claude Code itself spawns over stdio (from the per-Agent config file
@@ -180,7 +181,7 @@ export async function runChannel(agentId: string, version: string): Promise<void
     const listed = await withMcpClient(serverUrl, await getToken(), (client) => client.listTools(request.params))
     return {
       ...listed,
-      tools: [...listed.tools.filter((tool) => !CHANNEL_HANDLED_TOOLS.has(tool.name)), ACTIVITY_HOOK_TOOL_DESCRIPTOR],
+      tools: [...toolsForSession(listed.tools, CHANNEL_HANDLED_TOOLS), ACTIVITY_HOOK_TOOL_DESCRIPTOR],
     }
   })
   mcp.setRequestHandler(CallToolRequestSchema, async (request) => {

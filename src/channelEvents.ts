@@ -31,7 +31,10 @@ export type ChannelEvent =
 // The push events are deliberately minimal ("something changed, go look",
 // PLAN.md 9: a push is never the authoritative payload), so each body says
 // what happened and which Holodeck tool to reach for next - the model
-// receiving it has no other way to know what these mean. Meta is dropped of
+// receiving it has no other way to know what these mean. A notice that needs
+// no action says so: one that only suggests something ("consider whether...")
+// sends the model looking for a tool and asking its owner what to do, in the
+// middle of whatever the session was for (HOL-236). Meta is dropped of
 // undefined values first: `meta` is `Record<string, string>`.
 export function describeChannelEvent(event: ChannelEvent): ChannelNotification {
   switch (event.type) {
@@ -69,8 +72,7 @@ export function describeChannelEvent(event: ChannelEvent): ChannelNotification {
     }
     case 'agent_instructions_updated':
       return {
-        content:
-          'Your persona/instructions were just edited in Holodeck. Re-read them with get_my_context, and check with list_my_subscriptions whether your event subscriptions still make sense.',
+        content: 'Your persona/instructions were just edited in Holodeck. Re-read them with get_my_context and follow them from now on.',
         meta: { event: event.type },
       }
     case 'agent_mentioned': {
@@ -86,11 +88,17 @@ export function describeChannelEvent(event: ChannelEvent): ChannelNotification {
         }),
       }
     }
-    case 'agent_added_to_project':
+    case 'agent_added_to_project': {
+      // Holodeck gives a new member its default subscriptions (a Task
+      // assigned to it, a note on its Task, an answer to its question) and
+      // always pushes mentions, so there is nothing for the Agent to set up.
+      const name = event.data?.projectName
+      const project = name ? `the Holodeck project "${name}" (id ${event.projectId})` : `a Holodeck project (id ${event.projectId})`
       return {
-        content: `You were added to a Holodeck project (id ${event.projectId}). Consider whether it needs event subscriptions of its own (subscribe_to_event).`,
+        content: `You were added to ${project}. There is nothing to do right now: you will be told here when a task in it is assigned to you or someone mentions you. When you start working in it, read its notes with get_project_context.`,
         meta: { event: event.type, project_id: event.projectId },
       }
+    }
     case 'agent_removed_from_project':
       return {
         content: `You were removed from a Holodeck project (id ${event.projectId}). You no longer have access to it; drop anything in progress there.`,
