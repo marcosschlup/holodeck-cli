@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import http from 'node:http'
 import open from 'open'
+import { NO_CODE_PAGE, SIGNED_IN_PAGE, STATE_MISMATCH_PAGE, failedPage, renderLoginPage, type LoginPage } from './loginPage.js'
 
 // Loopback-redirect PKCE (HOL-128) — same pattern `gh auth login --web`,
 // `vercel login`, and `supabase login` use: a browser round trip against
@@ -59,9 +60,8 @@ export interface LoginTokens {
 
 // Waits for exactly one GET to `REDIRECT_URI`'s path carrying the expected
 // `state` (CSRF protection - rejects a callback that doesn't match this
-// specific flow's own authorize request), responds with a short HTML page
-// mirroring Claude Code's own "you can close this tab" convention (seen
-// live during HOL-126's Claude Code testing), then closes the server.
+// specific flow's own authorize request), responds with a short page saying
+// how it went (loginPage.ts), then closes the server.
 function waitForAuthorizationCode(expectedState: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const server = http.createServer((request, response) => {
@@ -75,28 +75,28 @@ function waitForAuthorizationCode(expectedState: string): Promise<string> {
       const code = url.searchParams.get('code')
       const state = url.searchParams.get('state')
 
-      const respondAndClose = (html: string) => {
-        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(html)
+      const respondAndClose = (page: LoginPage) => {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(renderLoginPage(page))
         server.close()
       }
 
       if (error) {
-        respondAndClose(`<h1>Sign-in failed</h1><p>${error}</p><p>You can close this tab.</p>`)
+        respondAndClose(failedPage(error))
         reject(new Error(`Authorization failed: ${error}`))
         return
       }
       if (state !== expectedState) {
-        respondAndClose('<h1>Sign-in failed</h1><p>State mismatch — this callback does not belong to the login attempt currently running.</p>')
+        respondAndClose(STATE_MISMATCH_PAGE)
         reject(new Error('OAuth state mismatch'))
         return
       }
       if (!code) {
-        respondAndClose('<h1>Sign-in failed</h1><p>No authorization code was returned.</p>')
+        respondAndClose(NO_CODE_PAGE)
         reject(new Error('No authorization code in callback'))
         return
       }
 
-      respondAndClose('<h1>Signed in</h1><p>You can close this tab and return to your terminal.</p>')
+      respondAndClose(SIGNED_IN_PAGE)
       resolve(code)
     })
 
